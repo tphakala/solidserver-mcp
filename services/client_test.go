@@ -7,24 +7,24 @@ import (
 )
 
 func TestNewSolidServerClient_MissingCredentials(t *testing.T) {
-	_, err := NewSolidServerClient("", "admin", "secret", false)
+	_, err := NewSolidServerClient("", "id", "secret", false)
 	if err == nil {
 		t.Error("expected error when host is missing")
 	}
 
 	_, err = NewSolidServerClient("host", "", "secret", false)
 	if err == nil {
-		t.Error("expected error when username is missing")
+		t.Error("expected error when token id is missing")
 	}
 
-	_, err = NewSolidServerClient("host", "admin", "", false)
+	_, err = NewSolidServerClient("host", "id", "", false)
 	if err == nil {
-		t.Error("expected error when password is missing")
+		t.Error("expected error when token secret is missing")
 	}
 }
 
 func TestNewSolidServerClient_Success(t *testing.T) {
-	client, err := NewSolidServerClient("sds.local", "admin", "secret", false)
+	client, err := NewSolidServerClient("sds.local", "id", "secret", false)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -34,7 +34,7 @@ func TestNewSolidServerClient_Success(t *testing.T) {
 }
 
 func TestAuthContext(t *testing.T) {
-	client, err := NewSolidServerClient("sds.local", "testuser", "testpass", false)
+	client, err := NewSolidServerClient("sds.local", "testid", "testsecret", false)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -47,10 +47,10 @@ func TestAuthContext(t *testing.T) {
 		t.Fatalf("expected context to contain BasicAuth, got %T", val)
 	}
 
-	if auth.UserName != "testuser" {
-		t.Errorf("expected UserName testuser, got %q", auth.UserName)
+	if auth.UserName != "testid" {
+		t.Errorf("expected UserName testid, got %q", auth.UserName)
 	}
-	if auth.Password != "testpass" {
-		t.Errorf("expected Password testpass, got %q", auth.Password)
+	if auth.Password != "testsecret" {
+		t.Errorf("expected Password testsecret, got %q", auth.Password)
 	}
 }

@@ -40,8 +40,8 @@ The server is configured via environment variables:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `SOLIDSERVER_HOST` | Hostname or IP of the SolidServer | Required |
-| `SOLIDSERVER_USERNAME` | API Username | Required |
-| `SOLIDSERVER_PASSWORD` | API Password | Required |
+| `SOLIDSERVER_TOKEN_ID` | API Token ID | Required |
+| `SOLIDSERVER_TOKEN_SECRET` | API Token Secret | Required |
 | `SOLIDSERVER_SSL_VERIFY` | Verify SSL certificate | `true` |
 | `MCP_TRANSPORT` | Transport mode (`stdio` or `http`) | `stdio` |
 | `MCP_HTTP_HOST` | Host/IP to bind HTTP server | `localhost` |
@@ -61,8 +61,8 @@ Designed for use with Claude Desktop, Cursor, and other local MCP clients.
       "command": "/path/to/solidserver-mcp",
       "env": {
         "SOLIDSERVER_HOST": "sds.example.com",
-        "SOLIDSERVER_USERNAME": "admin",
-        "SOLIDSERVER_PASSWORD": "yourpassword"
+        "SOLIDSERVER_TOKEN_ID": "yourtokenid",
+        "SOLIDSERVER_TOKEN_SECRET": "yourtokensecret"
       }
     }
   }
@@ -76,8 +76,8 @@ For remote deployment or shared contexts.
 ```bash
 export MCP_TRANSPORT=http
 export SOLIDSERVER_HOST=sds.example.com
-export SOLIDSERVER_USERNAME=admin
-export SOLIDSERVER_PASSWORD=yourpassword
+export SOLIDSERVER_TOKEN_ID=yourtokenid
+export SOLIDSERVER_TOKEN_SECRET=yourtokensecret
 ./solidserver-mcp
 ```
 

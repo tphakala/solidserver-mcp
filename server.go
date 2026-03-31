@@ -53,7 +53,7 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 
 // runStdio starts the MCP server on stdin/stdout.
 func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger) error {
-	client, err := services.NewSolidServerClient(cfg.Host, cfg.Username, cfg.Password, cfg.SSLVerify)
+	client, err := services.NewSolidServerClient(cfg.Host, cfg.TokenID, cfg.TokenSecret, cfg.SSLVerify)
 	if err != nil {
 		return fmt.Errorf("creating solidserver client: %w", err)
 	}
@@ -65,7 +65,7 @@ func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 
 // runHTTP starts the MCP server over HTTP with streamable transport.
 func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger) error {
-	client, err := services.NewSolidServerClient(cfg.Host, cfg.Username, cfg.Password, cfg.SSLVerify)
+	client, err := services.NewSolidServerClient(cfg.Host, cfg.TokenID, cfg.TokenSecret, cfg.SSLVerify)
 	if err != nil {
 		return fmt.Errorf("creating solidserver client: %w", err)
 	}
