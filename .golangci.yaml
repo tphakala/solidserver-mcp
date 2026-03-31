@@ -51,7 +51,7 @@ linters:
     - usetesting
     - wastedassign
   disable:
-    - unused
+    - unused # disabled - exported API surface may appear unused locally
   settings:
     dupl:
       threshold: 120

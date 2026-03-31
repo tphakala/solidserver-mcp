@@ -1,8 +1,10 @@
 version: '3'
 
 vars:
+  CONTAINER_RUNTIME: "{{default \"podman\" .CONTAINER_RUNTIME}}"
   BINARY_NAME: solidserver-mcp
   DOCKER_IMAGE: solidserver-mcp
+  CONTAINER_RUNTIME: '{{default "podman" .CONTAINER_RUNTIME}}'
 
 tasks:
   build:
@@ -33,7 +35,7 @@ tasks:
   docker-build:
     desc: Build Docker image
     cmds:
-      - podman build -t {{.DOCKER_IMAGE}} .
+      - "{{.CONTAINER_RUNTIME}} build -t {{.DOCKER_IMAGE}} ."
 
   fmt:
     desc: Format code
