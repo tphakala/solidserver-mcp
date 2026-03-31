@@ -1,0 +1,106 @@
+package tools
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/tphakala/solidserver-mcp/services"
+)
+
+// Subnet Input Structs
+type SubnetListInput struct {
+	Space  string `json:"space" jsonschema:"The name of the space."`
+	Where  string `json:"where,omitempty" jsonschema:"SQL-like where clause for filtering (e.g., \"subnet_name LIKE 'lan%'\")."`
+	Limit  int32  `json:"limit,omitempty" jsonschema:"Maximum number of results (default 50)."`
+	Offset int32  `json:"offset,omitempty" jsonschema:"Offset for pagination."`
+}
+
+type SubnetInfoInput struct {
+	ID int32 `json:"id" jsonschema:"The numeric ID of the subnet."`
+}
+
+type SpaceListInput struct {
+	Where  string `json:"where,omitempty" jsonschema:"SQL-like where clause for filtering."`
+	Limit  int32  `json:"limit,omitempty" jsonschema:"Maximum number of results (default 50)."`
+	Offset int32  `json:"offset,omitempty" jsonschema:"Offset for pagination."`
+}
+
+// RegisterSubnetTools registers subnet and space management tools.
+func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper) {
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_subnet_list",
+		Description: "Lists subnets in a space with optional filtering.",
+	}, subnetListHandler(client))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_subnet_info",
+		Description: "Returns detailed information for a specific subnet by ID.",
+	}, subnetInfoHandler(client))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_space_list",
+		Description: "Lists IPAM spaces.",
+	}, spaceListHandler(client))
+}
+
+//nolint:dupl // similar list logic across modules
+func subnetListHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, SubnetListInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetListInput) (*mcp.CallToolResult, any, error) {
+		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
+		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
+		return commonListHandler(ctx, opts,
+			func(c context.Context, where string, limit, offset int32) (any, error) {
+				w := fmt.Sprintf("site_name='%s'", in.Space)
+				if where != "" {
+					w = fmt.Sprintf("(%s) AND (%s)", w, where)
+				}
+				authCtx := client.AuthContext(c)
+				req := client.IpamApi.IpamNetworkList(authCtx).
+					Where(w).
+					Limit(limit).
+					Offset(offset)
+				resp, _, apiErr := req.Execute()
+				if apiErr.Error() != "" {
+					return nil, fmt.Errorf("%s", apiErr.Error())
+				}
+				return resp, nil
+			})
+	}
+}
+
+func subnetInfoHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, SubnetInfoInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetInfoInput) (*mcp.CallToolResult, any, error) {
+		authCtx := client.AuthContext(ctx)
+		req := client.IpamApi.IpamNetworkInfo(authCtx).NetworkId(in.ID)
+		resp, _, err := req.Execute()
+		if err.Error() != "" {
+			r, a := errorResult("SolidServer API error: %v", err.Error())
+			return r, a, nil
+		}
+
+		r, a := jsonResult(resp)
+		return r, a, nil
+	}
+}
+
+//nolint:dupl // similar list logic across modules
+func spaceListHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, SpaceListInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in SpaceListInput) (*mcp.CallToolResult, any, error) {
+		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
+		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
+		return commonListHandler(ctx, opts,
+			func(c context.Context, where string, limit, offset int32) (any, error) {
+				authCtx := client.AuthContext(c)
+				req := client.IpamApi.IpamSpaceList(authCtx).Limit(limit).Offset(offset)
+				if where != "" {
+					req = req.Where(where)
+				}
+				resp, _, apiErr := req.Execute()
+				if apiErr.Error() != "" {
+					return nil, fmt.Errorf("%s", apiErr.Error())
+				}
+				return resp, nil
+			})
+	}
+}
