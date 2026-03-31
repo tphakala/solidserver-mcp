@@ -38,7 +38,7 @@ type DhcpStaticAddInput struct {
 	Server string `json:"server" jsonschema:"The name of the DHCP server."`
 	Name   string `json:"name" jsonschema:"The name of the static reservation."`
 	IP     string `json:"ip" jsonschema:"The IP address to reserve."`
-	MAC    string `json:"mac" jsonschema:"The MAC address for the reservation (e.g. 01:00:11:22:33:44:55)."`
+	MAC    string `json:"mac" jsonschema:"The MAC address for the reservation (e.g. 01:00:11:22:33:44:55). The first octet is the type (01 for Ethernet)."`
 }
 
 type DhcpStaticDeleteInput struct {

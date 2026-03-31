@@ -16,13 +16,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: 'go.mod'
-          cache: false # golangci-lint-action handles caching
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: v1.64
-          args: --timeout=5m
+        run: go run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.6 run --timeout=5m
 
       - name: Install Task
         uses: arduino/setup-task@v2
