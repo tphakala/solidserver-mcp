@@ -1,3 +1,5 @@
+github.com/efficientip-labs/solidserver-go-client v1.8.4-3 h1:khE25uNrwbBlOzfi8Xngoyj1T2TMTfcU+WI7lT46xaI=
+github.com/efficientip-labs/solidserver-go-client v1.8.4-3/go.mod h1:DfvdYFUO0uHGIALzE/iqK9k/yUEdM2yIEWmaZhpm4rI=
 github.com/golang-jwt/jwt/v5 v5.3.0 h1:pv4AsKCKKZuqlgs5sUmn4x8UlGa0kEVt/puTpKx9vvo=
 github.com/golang-jwt/jwt/v5 v5.3.0/go.mod h1:fxCRLWMO43lRc8nhHWY6LGqRcf+1gQWArsqaEUEa5bE=
 github.com/google/go-cmp v0.7.0 h1:wk8382ETsv4JYUZwIsn6YpYiWiBsYLSJiTsyBybVuN8=

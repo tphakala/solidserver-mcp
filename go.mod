@@ -3,7 +3,7 @@ module github.com/tphakala/solidserver-mcp
 go 1.26
 
 require (
-	github.com/efficientip-labs/solidserver-go-client v0.0.0
+	github.com/efficientip-labs/solidserver-go-client v1.8.4-3
 	github.com/modelcontextprotocol/go-sdk v1.4.1
 	github.com/quasilyte/go-ruleguard/dsl v0.3.23
 )
@@ -17,5 +17,3 @@ require (
 	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 )
-
-replace github.com/efficientip-labs/solidserver-go-client => ../solidserver-go-client
