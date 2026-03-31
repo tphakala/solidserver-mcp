@@ -73,20 +73,20 @@ func ipCreateHandler(client *services.APIClientWrapper) func(context.Context, *m
 		} else {
 			// Find a free IP from the specified subnet
 			where := fmt.Sprintf("parent_subnet_addr='%s' AND is_free='1' AND space_name='%s'", in.Subnet, in.Space)
-			listReq := client.IpamApi.IpamAddressList(authCtx).Where(where).Limit(1)
+			listReq := client.IpamAPI.IpamAddressList(authCtx).Where(where).Limit(1)
 			listResp, _, apiErr := listReq.Execute()
 			if apiErr.Error() != "" {
 				r, a := errorResult("failed to find free IP in subnet %s: %v", in.Subnet, apiErr.Error())
 				return r, a, nil
 			}
 
-			if listResp.Data == nil || len(*listResp.Data) == 0 {
+			if len(listResp.Data) == 0 {
 				r, a := errorResult("no free IP found in subnet: %s", in.Subnet)
 				return r, a, nil
 			}
 
 			// Use the first available IP
-			firstFreeIP := (*listResp.Data)[0].AddressHostaddr
+			firstFreeIP := listResp.Data[0].AddressHostaddr
 			input.AddressHostaddr = firstFreeIP
 		}
 
@@ -97,7 +97,7 @@ func ipCreateHandler(client *services.APIClientWrapper) func(context.Context, *m
 			input.AddressMacAddr = &in.Mac
 		}
 
-		req := client.IpamApi.IpamAddressAdd(authCtx).IpamAddressAddInput(input)
+		req := client.IpamAPI.IpamAddressAdd(authCtx).IpamAddressAddInput(input)
 		resp, _, err := req.Execute()
 		if err.Error() != "" {
 			r, a := errorResult("SolidServer API error: %v", err.Error())
@@ -112,7 +112,7 @@ func ipCreateHandler(client *services.APIClientWrapper) func(context.Context, *m
 func ipDeleteHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, IPDeleteInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPDeleteInput) (*mcp.CallToolResult, any, error) {
 		authCtx := client.AuthContext(ctx)
-		req := client.IpamApi.IpamAddressDelete(authCtx).
+		req := client.IpamAPI.IpamAddressDelete(authCtx).
 			AddressHostaddr(in.IPAddress).
 			SpaceName(in.Space)
 
@@ -139,7 +139,7 @@ func ipFindFreeHandler(client *services.APIClientWrapper) func(context.Context, 
 			func(c context.Context, _ string, limit, offset int32) (any, error) {
 				where := fmt.Sprintf("parent_subnet_addr='%s' AND is_free='1' AND space_name='%s'", in.Subnet, in.Space)
 				authCtx := client.AuthContext(c)
-				req := client.IpamApi.IpamAddressList(authCtx).
+				req := client.IpamAPI.IpamAddressList(authCtx).
 					Where(where).
 					Limit(limit).
 					Offset(offset)
@@ -164,7 +164,7 @@ func ipListHandler(client *services.APIClientWrapper) func(context.Context, *mcp
 					w = fmt.Sprintf("(%s) AND (%s)", w, where)
 				}
 				authCtx := client.AuthContext(c)
-				req := client.IpamApi.IpamAddressList(authCtx).
+				req := client.IpamAPI.IpamAddressList(authCtx).
 					Where(w).
 					Limit(limit).
 					Offset(offset)

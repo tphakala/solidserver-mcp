@@ -45,10 +45,12 @@ func NewSolidServerClient(host, tokenID, tokenSecret string, sslVerify bool) (*A
 	}, nil
 }
 
-// AuthContext returns a context with basic auth credentials (TokenID:TokenSecret).
+// AuthContext returns a context with EIP API Token credentials.
+// The SDK signs each request with SHA3-256(secret\ntimestamp\nMETHOD\nurl)
+// and sends: Authorization: SDS <tokenID>:<signature>, X-SDS-TS: <timestamp>
 func (c *APIClientWrapper) AuthContext(ctx context.Context) context.Context {
-	return context.WithValue(ctx, sdsclient.ContextBasicAuth, sdsclient.BasicAuth{
-		UserName: c.tokenID,
-		Password: c.tokenSecret,
+	return context.WithValue(ctx, sdsclient.ContextEipApiTokenAuth, sdsclient.EipApiTokenAuth{
+		Token:  c.tokenID,
+		Secret: c.tokenSecret,
 	})
 }

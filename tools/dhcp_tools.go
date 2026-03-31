@@ -84,7 +84,7 @@ func dhcpServerListHandler(client *services.APIClientWrapper) func(context.Conte
 		return commonListHandler(ctx, ListOptions(in),
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				authCtx := client.AuthContext(c)
-				req := client.DhcpApi.DhcpServerList(authCtx).Limit(limit).Offset(offset)
+				req := client.DhcpAPI.DhcpServerList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
@@ -102,7 +102,7 @@ func dhcpScopeListHandler(client *services.APIClientWrapper) func(context.Contex
 		return commonListHandler(ctx, ListOptions(in),
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				authCtx := client.AuthContext(c)
-				req := client.DhcpApi.DhcpScopeList(authCtx).Limit(limit).Offset(offset)
+				req := client.DhcpAPI.DhcpScopeList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
@@ -120,7 +120,7 @@ func dhcpRangeListHandler(client *services.APIClientWrapper) func(context.Contex
 		return commonListHandler(ctx, ListOptions(in),
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				authCtx := client.AuthContext(c)
-				req := client.DhcpApi.DhcpRangeList(authCtx).Limit(limit).Offset(offset)
+				req := client.DhcpAPI.DhcpRangeList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
@@ -138,7 +138,7 @@ func dhcpLeaseListHandler(client *services.APIClientWrapper) func(context.Contex
 		return commonListHandler(ctx, ListOptions(in),
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				authCtx := client.AuthContext(c)
-				req := client.DhcpApi.DhcpLeaseList(authCtx).Limit(limit).Offset(offset)
+				req := client.DhcpAPI.DhcpLeaseList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
@@ -161,7 +161,7 @@ func dhcpStaticAddHandler(client *services.APIClientWrapper) func(context.Contex
 		}
 
 		authCtx := client.AuthContext(ctx)
-		req := client.DhcpApi.DhcpStaticAdd(authCtx).DhcpStaticAddInput(input)
+		req := client.DhcpAPI.DhcpStaticAdd(authCtx).DhcpStaticAddInput(input)
 		resp, _, err := req.Execute()
 		if err.Error() != "" {
 			r, a := errorResult("SolidServer API error: %v", err.Error())
@@ -176,7 +176,7 @@ func dhcpStaticAddHandler(client *services.APIClientWrapper) func(context.Contex
 func dhcpStaticDeleteHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, DhcpStaticDeleteInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpStaticDeleteInput) (*mcp.CallToolResult, any, error) {
 		authCtx := client.AuthContext(ctx)
-		req := client.DhcpApi.DhcpStaticDelete(authCtx).
+		req := client.DhcpAPI.DhcpStaticDelete(authCtx).
 			ServerName(in.Server).
 			StaticAddr(in.IP)
 

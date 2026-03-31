@@ -79,7 +79,7 @@ func subnetListHandler(client *services.APIClientWrapper) func(context.Context, 
 					w = fmt.Sprintf("(%s) AND (%s)", w, where)
 				}
 				authCtx := client.AuthContext(c)
-				req := client.IpamApi.IpamNetworkList(authCtx).
+				req := client.IpamAPI.IpamNetworkList(authCtx).
 					Where(w).
 					Limit(limit).
 					Offset(offset)
@@ -95,7 +95,7 @@ func subnetListHandler(client *services.APIClientWrapper) func(context.Context, 
 func subnetInfoHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, SubnetInfoInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetInfoInput) (*mcp.CallToolResult, any, error) {
 		authCtx := client.AuthContext(ctx)
-		req := client.IpamApi.IpamNetworkInfo(authCtx).NetworkId(in.ID)
+		req := client.IpamAPI.IpamNetworkInfo(authCtx).NetworkId(in.ID)
 		resp, _, err := req.Execute()
 		if err.Error() != "" {
 			r, a := errorResult("SolidServer API error: %v", err.Error())
@@ -117,7 +117,7 @@ func subnetCreateHandler(client *services.APIClientWrapper) func(context.Context
 		}
 
 		authCtx := client.AuthContext(ctx)
-		req := client.IpamApi.IpamNetworkAdd(authCtx).IpamNetworkAddInput(input)
+		req := client.IpamAPI.IpamNetworkAdd(authCtx).IpamNetworkAddInput(input)
 		resp, _, err := req.Execute()
 		if err.Error() != "" {
 			r, a := errorResult("SolidServer API error: %v", err.Error())
@@ -132,7 +132,7 @@ func subnetCreateHandler(client *services.APIClientWrapper) func(context.Context
 func subnetDeleteHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, SubnetDeleteInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetDeleteInput) (*mcp.CallToolResult, any, error) {
 		authCtx := client.AuthContext(ctx)
-		req := client.IpamApi.IpamNetworkDelete(authCtx).
+		req := client.IpamAPI.IpamNetworkDelete(authCtx).
 			SpaceName(in.Space).
 			NetworkAddr(in.Address)
 
@@ -155,7 +155,7 @@ func spaceListHandler(client *services.APIClientWrapper) func(context.Context, *
 		return commonListHandler(ctx, opts,
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				authCtx := client.AuthContext(c)
-				req := client.IpamApi.IpamSpaceList(authCtx).Limit(limit).Offset(offset)
+				req := client.IpamAPI.IpamSpaceList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}

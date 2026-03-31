@@ -40,17 +40,17 @@ func TestAuthContext(t *testing.T) {
 	}
 
 	ctx := client.AuthContext(t.Context())
-	val := ctx.Value(sdsclient.ContextBasicAuth)
-	
-	auth, ok := val.(sdsclient.BasicAuth)
+	val := ctx.Value(sdsclient.ContextEipApiTokenAuth)
+
+	auth, ok := val.(sdsclient.EipApiTokenAuth)
 	if !ok {
-		t.Fatalf("expected context to contain BasicAuth, got %T", val)
+		t.Fatalf("expected context to contain EipApiTokenAuth, got %T", val)
 	}
 
-	if auth.UserName != "testid" {
-		t.Errorf("expected UserName testid, got %q", auth.UserName)
+	if auth.Token != "testid" {
+		t.Errorf("expected Token testid, got %q", auth.Token)
 	}
-	if auth.Password != "testsecret" {
-		t.Errorf("expected Password testsecret, got %q", auth.Password)
+	if auth.Secret != "testsecret" {
+		t.Errorf("expected Secret testsecret, got %q", auth.Secret)
 	}
 }

@@ -64,7 +64,7 @@ func vlanDomainListHandler(client *services.APIClientWrapper) func(context.Conte
 		return commonListHandler(ctx, opts,
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				authCtx := client.AuthContext(c)
-				req := client.VlanApi.VlanDomainList(authCtx).Limit(limit).Offset(offset)
+				req := client.VlanAPI.VlanDomainList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
@@ -96,7 +96,7 @@ func vlanListHandler(client *services.APIClientWrapper) func(context.Context, *m
 				}
 
 				authCtx := client.AuthContext(c)
-				req := client.VlanApi.VlanVlanList(authCtx).Limit(limit).Offset(offset)
+				req := client.VlanAPI.VlanVlanList(authCtx).Limit(limit).Offset(offset)
 				if w != "" {
 					req = req.Where(w)
 				}
@@ -118,7 +118,7 @@ func vlanCreateHandler(client *services.APIClientWrapper) func(context.Context, 
 		}
 
 		authCtx := client.AuthContext(ctx)
-		req := client.VlanApi.VlanVlanAdd(authCtx).VlanVlanAddInput(input)
+		req := client.VlanAPI.VlanVlanAdd(authCtx).VlanVlanAddInput(input)
 		resp, _, err := req.Execute()
 		if err.Error() != "" {
 			r, a := errorResult("SolidServer API error: %v", err.Error())
@@ -133,7 +133,7 @@ func vlanCreateHandler(client *services.APIClientWrapper) func(context.Context, 
 func vlanDeleteHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, VlanDeleteInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanDeleteInput) (*mcp.CallToolResult, any, error) {
 		authCtx := client.AuthContext(ctx)
-		req := client.VlanApi.VlanVlanDelete(authCtx).
+		req := client.VlanAPI.VlanVlanDelete(authCtx).
 			DomainName(in.Domain).
 			VlanName(in.Name)
 

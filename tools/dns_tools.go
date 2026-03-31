@@ -82,7 +82,7 @@ func dnsRecordCreateHandler(client *services.APIClientWrapper) func(context.Cont
 		}
 
 		authCtx := client.AuthContext(ctx)
-		req := client.DnsApi.DnsRrAdd(authCtx).DnsRrAddInput(input)
+		req := client.DnsAPI.DnsRrAdd(authCtx).DnsRrAddInput(input)
 		resp, _, err := req.Execute()
 		if err.Error() != "" {
 			r, a := errorResult("SolidServer API error: %v", err.Error())
@@ -97,7 +97,7 @@ func dnsRecordCreateHandler(client *services.APIClientWrapper) func(context.Cont
 func dnsRecordDeleteHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, DNSRecordDeleteInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordDeleteInput) (*mcp.CallToolResult, any, error) {
 		authCtx := client.AuthContext(ctx)
-		req := client.DnsApi.DnsRrDelete(authCtx).
+		req := client.DnsAPI.DnsRrDelete(authCtx).
 			ZoneName(in.Zone).
 			RrName(in.Name).
 			RrType(in.Type)
@@ -127,7 +127,7 @@ func dnsRecordListHandler(client *services.APIClientWrapper) func(context.Contex
 		return commonListHandler(ctx, opts,
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				authCtx := client.AuthContext(c)
-				req := client.DnsApi.DnsRrList(authCtx).Limit(limit).Offset(offset)
+				req := client.DnsAPI.DnsRrList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
@@ -148,7 +148,7 @@ func dnsZoneListHandler(client *services.APIClientWrapper) func(context.Context,
 		return commonListHandler(ctx, opts,
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				authCtx := client.AuthContext(c)
-				req := client.DnsApi.DnsZoneList(authCtx).Limit(limit).Offset(offset)
+				req := client.DnsAPI.DnsZoneList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
