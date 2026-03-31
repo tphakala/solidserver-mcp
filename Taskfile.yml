@@ -1,0 +1,47 @@
+version: '3'
+
+vars:
+  BINARY_NAME: solidserver-mcp
+  DOCKER_IMAGE: solidserver-mcp
+
+tasks:
+  build:
+    desc: Build the binary
+    cmds:
+      - go build -o {{.BINARY_NAME}} .
+
+  run:
+    desc: Run the server in stdio mode (requires env vars)
+    cmds:
+      - go run .
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test -v ./...
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -f {{.BINARY_NAME}}
+
+  docker-build:
+    desc: Build Docker image
+    cmds:
+      - podman build -t {{.DOCKER_IMAGE}} .
+
+  fmt:
+    desc: Format code
+    cmds:
+      - go fmt ./...
+      - goimports -w .
+
+  tidy:
+    desc: Tidy go modules
+    cmds:
+      - go mod tidy
