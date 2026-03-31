@@ -75,8 +75,8 @@ func ipCreateHandler(client *services.APIClientWrapper) func(context.Context, *m
 			where := fmt.Sprintf("parent_subnet_addr='%s' AND is_free='1' AND space_name='%s'", in.Subnet, in.Space)
 			listReq := client.IpamApi.IpamAddressList(authCtx).Where(where).Limit(1)
 			listResp, _, apiErr := listReq.Execute()
-			if apiErr != nil {
-				r, a := errorResult("failed to find free IP in subnet %s: %v", in.Subnet, apiErr)
+			if apiErr.Error() != "" {
+				r, a := errorResult("failed to find free IP in subnet %s: %v", in.Subnet, apiErr.Error())
 				return r, a, nil
 			}
 
@@ -99,8 +99,8 @@ func ipCreateHandler(client *services.APIClientWrapper) func(context.Context, *m
 
 		req := client.IpamApi.IpamAddressAdd(authCtx).IpamAddressAddInput(input)
 		resp, _, err := req.Execute()
-		if err != nil {
-			r, a := errorResult("SolidServer API error: %v", err)
+		if err.Error() != "" {
+			r, a := errorResult("SolidServer API error: %v", err.Error())
 			return r, a, nil
 		}
 
@@ -144,7 +144,7 @@ func ipFindFreeHandler(client *services.APIClientWrapper) func(context.Context, 
 					Limit(limit).
 					Offset(offset)
 				resp, _, apiErr := req.Execute()
-				if apiErr != nil {
+				if apiErr.Error() != "" {
 					return nil, fmt.Errorf("%s", apiErr.Error())
 				}
 				return resp, nil
