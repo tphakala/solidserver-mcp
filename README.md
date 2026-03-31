@@ -62,6 +62,8 @@ For remote deployment or shared contexts.
 ```bash
 export MCP_TRANSPORT=http
 export SOLIDSERVER_HOST=sds.example.com
+export SOLIDSERVER_USERNAME=admin
+export SOLIDSERVER_PASSWORD=yourpassword
 ./solidserver-mcp
 ```
 
