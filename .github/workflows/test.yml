@@ -18,7 +18,10 @@ jobs:
           go-version-file: 'go.mod'
 
       - name: golangci-lint
-        run: go run github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.6 run --timeout=5m
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.11.4
+          args: --timeout=5m
 
       - name: Install Task
         uses: arduino/setup-task@v2
