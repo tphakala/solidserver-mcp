@@ -69,7 +69,7 @@ export SOLIDSERVER_PASSWORD=yourpassword
 
 ## Development
 
-Requires Go 1.26.
+Requires Go 1.24.
 
 - **Build**: `task build`
 - **Lint**: `task lint`
