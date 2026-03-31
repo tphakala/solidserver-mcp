@@ -1,0 +1,13 @@
+# Binaries
+solidserver-mcp
+
+# Environment variables
+.env
+.env.local
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
