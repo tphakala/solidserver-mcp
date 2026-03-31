@@ -15,6 +15,7 @@ func RegisterAll(s *mcp.Server, client *services.APIClientWrapper) {
 	RegisterSubnetTools(s, client)
 	RegisterDNSTools(s, client)
 	RegisterVlanTools(s, client)
+	RegisterDhcpTools(s, client)
 }
 
 // textResult builds a simple text content result.

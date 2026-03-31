@@ -12,12 +12,26 @@ An MCP (Model Context Protocol) server for EfficientIP SolidServer IPAM/DNS mana
 - **Subnet Tools**:
   - `solidserver_subnet_list`: List and filter subnets in a space.
   - `solidserver_subnet_info`: Get detailed information for a specific subnet.
+  - `solidserver_subnet_create`: Create a new subnet within a space.
+  - `solidserver_subnet_delete`: Delete a specific subnet from a space.
   - `solidserver_space_list`: List available IPAM spaces.
 - **DNS Tools**:
   - `solidserver_dns_record_create`: Create A, AAAA, CNAME, and other records.
   - `solidserver_dns_record_delete`: Delete DNS records.
   - `solidserver_dns_record_list`: List and filter DNS resource records.
   - `solidserver_dns_zone_list`: List DNS zones.
+- **VLAN Tools**:
+  - `solidserver_vlan_domain_list`: List VLAN domains.
+  - `solidserver_vlan_list`: List and filter VLANs.
+  - `solidserver_vlan_create`: Create a new VLAN.
+  - `solidserver_vlan_delete`: Delete a specific VLAN.
+- **DHCP Tools**:
+  - `solidserver_dhcp_server_list`: List DHCP servers.
+  - `solidserver_dhcp_scope_list`: List DHCP scopes.
+  - `solidserver_dhcp_range_list`: List DHCP ranges.
+  - `solidserver_dhcp_lease_list`: List DHCP leases.
+  - `solidserver_dhcp_static_add`: Add a static DHCP reservation.
+  - `solidserver_dhcp_static_delete`: Delete a static DHCP reservation.
 
 ## Configuration
 
@@ -79,4 +93,3 @@ Requires Go 1.24.
 ## License
 
 Apache-2.0
-

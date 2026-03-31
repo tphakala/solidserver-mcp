@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/efficientip-labs/solidserver-go-client/sdsclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/tphakala/solidserver-mcp/services"
 )
@@ -26,6 +27,18 @@ type SpaceListInput struct {
 	Offset int32  `json:"offset,omitempty" jsonschema:"Offset for pagination."`
 }
 
+type SubnetCreateInput struct {
+	Space   string `json:"space" jsonschema:"The name of the space."`
+	Address string `json:"address" jsonschema:"The start IP address of the subnet."`
+	Prefix  string `json:"prefix" jsonschema:"The prefix length (e.g. '24')."`
+	Name    string `json:"name" jsonschema:"The name of the subnet."`
+}
+
+type SubnetDeleteInput struct {
+	Space   string `json:"space" jsonschema:"The name of the space."`
+	Address string `json:"address" jsonschema:"The start IP address of the subnet to delete."`
+}
+
 // RegisterSubnetTools registers subnet and space management tools.
 func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper) {
 	mcp.AddTool(s, &mcp.Tool{
@@ -37,6 +50,16 @@ func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper) {
 		Name:        "solidserver_subnet_info",
 		Description: "Returns detailed information for a specific subnet by ID.",
 	}, subnetInfoHandler(client))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_subnet_create",
+		Description: "Creates a new subnet within a space.",
+	}, subnetCreateHandler(client))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_subnet_delete",
+		Description: "Deletes a specific subnet from a space.",
+	}, subnetDeleteHandler(client))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_space_list",
@@ -73,6 +96,46 @@ func subnetInfoHandler(client *services.APIClientWrapper) func(context.Context, 
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetInfoInput) (*mcp.CallToolResult, any, error) {
 		authCtx := client.AuthContext(ctx)
 		req := client.IpamApi.IpamNetworkInfo(authCtx).NetworkId(in.ID)
+		resp, _, err := req.Execute()
+		if err.Error() != "" {
+			r, a := errorResult("SolidServer API error: %v", err.Error())
+			return r, a, nil
+		}
+
+		r, a := jsonResult(resp)
+		return r, a, nil
+	}
+}
+
+func subnetCreateHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, SubnetCreateInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetCreateInput) (*mcp.CallToolResult, any, error) {
+		input := sdsclient.IpamNetworkAddInput{
+			SpaceName:     &in.Space,
+			NetworkAddr:   &in.Address,
+			NetworkPrefix: &in.Prefix,
+			NetworkName:   &in.Name,
+		}
+
+		authCtx := client.AuthContext(ctx)
+		req := client.IpamApi.IpamNetworkAdd(authCtx).IpamNetworkAddInput(input)
+		resp, _, err := req.Execute()
+		if err.Error() != "" {
+			r, a := errorResult("SolidServer API error: %v", err.Error())
+			return r, a, nil
+		}
+
+		r, a := jsonResult(resp)
+		return r, a, nil
+	}
+}
+
+func subnetDeleteHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, SubnetDeleteInput) (*mcp.CallToolResult, any, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetDeleteInput) (*mcp.CallToolResult, any, error) {
+		authCtx := client.AuthContext(ctx)
+		req := client.IpamApi.IpamNetworkDelete(authCtx).
+			SpaceName(in.Space).
+			NetworkAddr(in.Address)
+
 		resp, _, err := req.Execute()
 		if err.Error() != "" {
 			r, a := errorResult("SolidServer API error: %v", err.Error())
