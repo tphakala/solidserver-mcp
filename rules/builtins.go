@@ -145,11 +145,11 @@ func RangeOverInteger(m dsl.Matcher) {
 		`for $i := 0; $i < $n; $i++ { $*body }`,
 	).
 		Where(
-			!m["n"].Text.Matches(`.*\.N$`) &&
-				!m["n"].Text.Matches(`\.(NumField|NumMethod|NumIn|NumOut)\(\)$`),
+			m["n"].Text.Matches(`^[A-Za-z_]\w*(\.[A-Za-z_]\w*)*$`) &&
+				!m["n"].Text.Matches(`.*\.N$`),
 		).
 		Report("use for $i := range $n instead of for $i := 0; $i < $n; $i++ (Go 1.22+)").
-		Suggest("for $i := range $n { $body }")
+		Suggest("for $i := range $n { $*body }")
 }
 
 // AppendWithoutValues detects append calls with no values which have no effect.

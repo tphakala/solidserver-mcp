@@ -24,8 +24,16 @@ WORKDIR /app
 # Install runtime dependencies (ca-certificates for HTTPS)
 RUN apk add --no-cache ca-certificates
 
+# Create non-root user
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+
 # Copy binary from builder
 COPY --from=builder /app/solidserver-mcp .
+
+# Ensure correct permissions
+RUN chown -R appuser:appgroup /app
+
+USER appuser
 
 # Run the application
 ENTRYPOINT ["./solidserver-mcp"]

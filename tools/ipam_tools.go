@@ -65,9 +65,31 @@ func ipCreateHandler(client *services.APIClientWrapper) func(context.Context, *m
 		input := sdsclient.IpamAddressAddInput{
 			SpaceName: &in.Space,
 		}
+
+		authCtx := client.AuthContext(ctx)
+
 		if in.Hostaddr != "" {
 			input.AddressHostaddr = &in.Hostaddr
+		} else {
+			// Find a free IP from the specified subnet
+			where := fmt.Sprintf("parent_subnet_addr='%s' AND is_free='1' AND space_name='%s'", in.Subnet, in.Space)
+			listReq := client.IpamApi.IpamAddressList(authCtx).Where(where).Limit(1)
+			listResp, _, apiErr := listReq.Execute()
+			if apiErr != nil {
+				r, a := errorResult("failed to find free IP in subnet %s: %v", in.Subnet, apiErr)
+				return r, a, nil
+			}
+
+			if listResp.Data == nil || len(*listResp.Data) == 0 {
+				r, a := errorResult("no free IP found in subnet: %s", in.Subnet)
+				return r, a, nil
+			}
+
+			// Use the first available IP
+			firstFreeIP := (*listResp.Data)[0].AddressHostaddr
+			input.AddressHostaddr = firstFreeIP
 		}
+
 		if in.Name != "" {
 			input.AddressName = &in.Name
 		}
@@ -75,11 +97,10 @@ func ipCreateHandler(client *services.APIClientWrapper) func(context.Context, *m
 			input.AddressMacAddr = &in.Mac
 		}
 
-		authCtx := client.AuthContext(ctx)
 		req := client.IpamApi.IpamAddressAdd(authCtx).IpamAddressAddInput(input)
 		resp, _, err := req.Execute()
-		if err.Error() != "" {
-			r, a := errorResult("SolidServer API error: %v", err.Error())
+		if err != nil {
+			r, a := errorResult("SolidServer API error: %v", err)
 			return r, a, nil
 		}
 
@@ -108,17 +129,22 @@ func ipDeleteHandler(client *services.APIClientWrapper) func(context.Context, *m
 
 func ipFindFreeHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, IPFindFreeInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPFindFreeInput) (*mcp.CallToolResult, any, error) {
+		limit := in.Limit
+		if limit <= 0 {
+			limit = 10
+		}
 		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
-		opts := ListOptions{Limit: in.Limit, Offset: in.Offset}
+		opts := ListOptions{Limit: limit, Offset: in.Offset}
 		return commonListHandler(ctx, opts,
 			func(c context.Context, _ string, limit, offset int32) (any, error) {
 				where := fmt.Sprintf("parent_subnet_addr='%s' AND is_free='1' AND space_name='%s'", in.Subnet, in.Space)
 				authCtx := client.AuthContext(c)
 				req := client.IpamApi.IpamAddressList(authCtx).
 					Where(where).
-					Limit(limit)
+					Limit(limit).
+					Offset(offset)
 				resp, _, apiErr := req.Execute()
-				if apiErr.Error() != "" {
+				if apiErr != nil {
 					return nil, fmt.Errorf("%s", apiErr.Error())
 				}
 				return resp, nil

@@ -17,7 +17,10 @@ func main() {
 }
 
 func runMain() error {
-	cfg := LoadConfig()
+	cfg, err := LoadConfig()
+	if err != nil {
+		return err
+	}
 
 	// Set up structured logging to stderr (protects stdio JSON-RPC channel)
 	logLevel := slog.LevelInfo

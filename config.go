@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 )
@@ -18,7 +19,7 @@ type Config struct {
 }
 
 // LoadConfig reads configuration from environment variables.
-func LoadConfig() Config {
+func LoadConfig() (Config, error) {
 	cfg := Config{
 		Host:      os.Getenv("SOLIDSERVER_HOST"),
 		Username:  os.Getenv("SOLIDSERVER_USERNAME"),
@@ -26,6 +27,16 @@ func LoadConfig() Config {
 		Transport: os.Getenv("MCP_TRANSPORT"),
 		LogLevel:  os.Getenv("LOG_LEVEL"),
 		HTTPHost:  os.Getenv("MCP_HTTP_HOST"),
+	}
+
+	if cfg.Host == "" {
+		return Config{}, fmt.Errorf("SOLIDSERVER_HOST environment variable is required")
+	}
+	if cfg.Username == "" {
+		return Config{}, fmt.Errorf("SOLIDSERVER_USERNAME environment variable is required")
+	}
+	if cfg.Password == "" {
+		return Config{}, fmt.Errorf("SOLIDSERVER_PASSWORD environment variable is required")
 	}
 
 	if cfg.Transport == "" {
@@ -63,5 +74,5 @@ func LoadConfig() Config {
 		cfg.HTTPPort = 8080
 	}
 
-	return cfg
+	return cfg, nil
 }

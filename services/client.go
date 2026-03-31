@@ -30,7 +30,10 @@ func NewSolidServerClient(host, username, password string, sslVerify bool) (*API
 	}
 
 	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: !sslVerify},
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: !sslVerify,
+			MinVersion:         tls.VersionTLS12,
+		},
 	}
 	cfg.HTTPClient = &http.Client{Transport: tr}
 

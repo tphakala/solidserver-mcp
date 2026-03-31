@@ -30,6 +30,7 @@ The server is configured via environment variables:
 | `SOLIDSERVER_PASSWORD` | API Password | Required |
 | `SOLIDSERVER_SSL_VERIFY` | Verify SSL certificate | `true` |
 | `MCP_TRANSPORT` | Transport mode (`stdio` or `http`) | `stdio` |
+| `MCP_HTTP_HOST` | Host/IP to bind HTTP server | `localhost` |
 | `MCP_HTTP_PORT` | Port for HTTP transport | `8080` |
 | `LOG_LEVEL` | Logging level (`debug`, `info`, `warn`, `error`) | `info` |
 

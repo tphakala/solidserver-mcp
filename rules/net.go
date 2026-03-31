@@ -81,7 +81,7 @@ func FilepathIsLocal(m dsl.Matcher) {
 //	    },
 //	}
 //
-// New pattern (Go 1.26+):
+// New pattern (Rewrite is available since Go 1.20+; Director deprecated in Go 1.26):
 //
 //	proxy := &httputil.ReverseProxy{
 //	    Rewrite: func(r *httputil.ProxyRequest) {
