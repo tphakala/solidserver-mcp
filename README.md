@@ -119,7 +119,7 @@ export SOLIDSERVER_TOKEN_SECRET=yourtokensecret
 
 ## Development
 
-Requires Go 1.24.
+Requires Go 1.26.
 
 - **Build**: `task build`
 - **Lint**: `task lint`
