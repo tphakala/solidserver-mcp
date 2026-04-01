@@ -121,10 +121,12 @@ export SOLIDSERVER_TOKEN_SECRET=yourtokensecret
 
 Requires Go 1.26.
 
-- **Build**: `task build`
-- **Lint**: `task lint`
-- **Tidy**: `task tidy`
-- **Docker/Podman Build**: `task docker-build`
+- **Check** (fmt + vet + lint + test): `task check`
+- **Build**: `task go:build`
+- **Lint**: `task go:lint`
+- **Format**: `task go:fmt`
+- **Tidy**: `task go:tidy`
+- **Container image**: `task image:build` (override tool: `CONTAINER_TOOL=docker task image:build`)
 
 ## License
 

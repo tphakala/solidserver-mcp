@@ -30,7 +30,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Test
-        run: task test
+        run: task go:test
 
       - name: Build
-        run: task build
+        run: task go:build
