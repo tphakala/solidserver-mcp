@@ -2,7 +2,7 @@ package tools
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 
 	"github.com/efficientip-labs/solidserver-go-client/sdsclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -41,30 +41,31 @@ type DNSZoneListInput struct {
 }
 
 // RegisterDNSTools registers DNS management tools.
-func RegisterDNSTools(s *mcp.Server, client *services.APIClientWrapper) {
+func RegisterDNSTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dns_record_create",
 		Description: "Creates a new DNS resource record (A, AAAA, CNAME, etc.).",
-	}, dnsRecordCreateHandler(client))
+	}, dnsRecordCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dns_record_delete",
 		Description: "Deletes a specific DNS resource record.",
-	}, dnsRecordDeleteHandler(client))
+	}, dnsRecordDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dns_record_list",
 		Description: "Lists DNS records with filtering.",
-	}, dnsRecordListHandler(client))
+	}, dnsRecordListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dns_zone_list",
 		Description: "Lists DNS zones.",
-	}, dnsZoneListHandler(client))
+	}, dnsZoneListHandler(client, logger))
 }
 
-func dnsRecordCreateHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, DNSRecordCreateInput) (*mcp.CallToolResult, any, error) {
+func dnsRecordCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSRecordCreateInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordCreateInput) (*mcp.CallToolResult, any, error) {
+		logger.Info("creating DNS record", "name", in.Name, "zone", in.Zone, "type", in.Type, "value", in.Value)
 		input := sdsclient.DnsRrAddInput{
 			ZoneName: &in.Zone,
 			RrName:   &in.Name,
@@ -84,8 +85,8 @@ func dnsRecordCreateHandler(client *services.APIClientWrapper) func(context.Cont
 		authCtx := client.AuthContext(ctx)
 		req := client.DnsAPI.DnsRrAdd(authCtx).DnsRrAddInput(input)
 		resp, _, err := req.Execute()
-		if err.Error() != "" {
-			r, a := errorResult("SolidServer API error: %v", err.Error())
+		if err != nil {
+			r, a := errorResult("SolidServer API error: %v", err)
 			return r, a, nil
 		}
 
@@ -94,8 +95,9 @@ func dnsRecordCreateHandler(client *services.APIClientWrapper) func(context.Cont
 	}
 }
 
-func dnsRecordDeleteHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, DNSRecordDeleteInput) (*mcp.CallToolResult, any, error) {
+func dnsRecordDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSRecordDeleteInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordDeleteInput) (*mcp.CallToolResult, any, error) {
+		logger.Info("deleting DNS record", "name", in.Name, "zone", in.Zone, "type", in.Type)
 		authCtx := client.AuthContext(ctx)
 		req := client.DnsAPI.DnsRrDelete(authCtx).
 			ZoneName(in.Zone).
@@ -110,8 +112,8 @@ func dnsRecordDeleteHandler(client *services.APIClientWrapper) func(context.Cont
 		}
 
 		resp, _, err := req.Execute()
-		if err.Error() != "" {
-			r, a := errorResult("SolidServer API error: %v", err.Error())
+		if err != nil {
+			r, a := errorResult("SolidServer API error: %v", err)
 			return r, a, nil
 		}
 
@@ -120,11 +122,11 @@ func dnsRecordDeleteHandler(client *services.APIClientWrapper) func(context.Cont
 	}
 }
 
-func dnsRecordListHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, DNSRecordListInput) (*mcp.CallToolResult, any, error) {
+func dnsRecordListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSRecordListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordListInput) (*mcp.CallToolResult, any, error) {
 		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
-		return commonListHandler(ctx, opts,
+		return commonListHandler(ctx, opts, logger, "solidserver_dns_record_list",
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				authCtx := client.AuthContext(c)
 				req := client.DnsAPI.DnsRrList(authCtx).Limit(limit).Offset(offset)
@@ -132,8 +134,8 @@ func dnsRecordListHandler(client *services.APIClientWrapper) func(context.Contex
 					req = req.Where(where)
 				}
 				resp, _, apiErr := req.Execute()
-				if apiErr.Error() != "" {
-					return nil, fmt.Errorf("%s", apiErr.Error())
+				if apiErr != nil {
+					return nil, apiErr
 				}
 				return resp, nil
 			})
@@ -141,11 +143,11 @@ func dnsRecordListHandler(client *services.APIClientWrapper) func(context.Contex
 }
 
 //nolint:dupl // similar list logic across modules
-func dnsZoneListHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, DNSZoneListInput) (*mcp.CallToolResult, any, error) {
+func dnsZoneListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSZoneListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSZoneListInput) (*mcp.CallToolResult, any, error) {
 		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
-		return commonListHandler(ctx, opts,
+		return commonListHandler(ctx, opts, logger, "solidserver_dns_zone_list",
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				authCtx := client.AuthContext(c)
 				req := client.DnsAPI.DnsZoneList(authCtx).Limit(limit).Offset(offset)
@@ -153,8 +155,8 @@ func dnsZoneListHandler(client *services.APIClientWrapper) func(context.Context,
 					req = req.Where(where)
 				}
 				resp, _, apiErr := req.Execute()
-				if apiErr.Error() != "" {
-					return nil, fmt.Errorf("%s", apiErr.Error())
+				if apiErr != nil {
+					return nil, apiErr
 				}
 				return resp, nil
 			})

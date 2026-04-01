@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/efficientip-labs/solidserver-go-client/sdsclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -38,29 +39,29 @@ type IPListInput struct {
 }
 
 // RegisterIPAMTools registers IP management tools.
-func RegisterIPAMTools(s *mcp.Server, client *services.APIClientWrapper) {
+func RegisterIPAMTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_ip_create",
 		Description: "Requests a new IP address allocation from a specified subnet. If hostaddr is omitted, it allocates the next free IP.",
-	}, ipCreateHandler(client))
+	}, ipCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_ip_delete",
 		Description: "Releases/deletes a specified IP address.",
-	}, ipDeleteHandler(client))
+	}, ipDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_ip_find_free",
 		Description: "Returns a list of available free IP addresses in a subnet without allocating them.",
-	}, ipFindFreeHandler(client))
+	}, ipFindFreeHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_ip_list",
 		Description: "Lists IP addresses in a space/subnet with optional filtering.",
-	}, ipListHandler(client))
+	}, ipListHandler(client, logger))
 }
 
-func ipCreateHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, IPCreateInput) (*mcp.CallToolResult, any, error) {
+func ipCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, IPCreateInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPCreateInput) (*mcp.CallToolResult, any, error) {
 		input := sdsclient.IpamAddressAddInput{
 			SpaceName: &in.Space,
@@ -73,10 +74,11 @@ func ipCreateHandler(client *services.APIClientWrapper) func(context.Context, *m
 		} else {
 			// Find a free IP from the specified subnet
 			where := fmt.Sprintf("parent_subnet_addr='%s' AND is_free='1' AND space_name='%s'", in.Subnet, in.Space)
+			logger.Debug("searching for free IP", "subnet", in.Subnet, "space", in.Space)
 			listReq := client.IpamAPI.IpamAddressList(authCtx).Where(where).Limit(1)
 			listResp, _, apiErr := listReq.Execute()
-			if apiErr.Error() != "" {
-				r, a := errorResult("failed to find free IP in subnet %s: %v", in.Subnet, apiErr.Error())
+			if apiErr != nil {
+				r, a := errorResult("failed to find free IP in subnet %s: %v", in.Subnet, apiErr)
 				return r, a, nil
 			}
 
@@ -87,7 +89,12 @@ func ipCreateHandler(client *services.APIClientWrapper) func(context.Context, *m
 
 			// Use the first available IP
 			firstFreeIP := listResp.Data[0].AddressHostaddr
+			if firstFreeIP == nil {
+				r, a := errorResult("found IP entry in subnet %s but it has no address", in.Subnet)
+				return r, a, nil
+			}
 			input.AddressHostaddr = firstFreeIP
+			logger.Debug("found free IP", "ip", *firstFreeIP)
 		}
 
 		if in.Name != "" {
@@ -97,10 +104,11 @@ func ipCreateHandler(client *services.APIClientWrapper) func(context.Context, *m
 			input.AddressMacAddr = &in.Mac
 		}
 
+		logger.Info("creating IP address", "ip", *input.AddressHostaddr, "space", in.Space)
 		req := client.IpamAPI.IpamAddressAdd(authCtx).IpamAddressAddInput(input)
 		resp, _, err := req.Execute()
-		if err.Error() != "" {
-			r, a := errorResult("SolidServer API error: %v", err.Error())
+		if err != nil {
+			r, a := errorResult("SolidServer API error: %v", err)
 			return r, a, nil
 		}
 
@@ -109,16 +117,17 @@ func ipCreateHandler(client *services.APIClientWrapper) func(context.Context, *m
 	}
 }
 
-func ipDeleteHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, IPDeleteInput) (*mcp.CallToolResult, any, error) {
+func ipDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, IPDeleteInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPDeleteInput) (*mcp.CallToolResult, any, error) {
+		logger.Info("deleting IP address", "ip", in.IPAddress, "space", in.Space)
 		authCtx := client.AuthContext(ctx)
 		req := client.IpamAPI.IpamAddressDelete(authCtx).
 			AddressHostaddr(in.IPAddress).
 			SpaceName(in.Space)
 
 		resp, _, err := req.Execute()
-		if err.Error() != "" {
-			r, a := errorResult("SolidServer API error: %v", err.Error())
+		if err != nil {
+			r, a := errorResult("SolidServer API error: %v", err)
 			return r, a, nil
 		}
 
@@ -127,7 +136,7 @@ func ipDeleteHandler(client *services.APIClientWrapper) func(context.Context, *m
 	}
 }
 
-func ipFindFreeHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, IPFindFreeInput) (*mcp.CallToolResult, any, error) {
+func ipFindFreeHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, IPFindFreeInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPFindFreeInput) (*mcp.CallToolResult, any, error) {
 		limit := in.Limit
 		if limit <= 0 {
@@ -135,7 +144,7 @@ func ipFindFreeHandler(client *services.APIClientWrapper) func(context.Context, 
 		}
 		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Limit: limit, Offset: in.Offset}
-		return commonListHandler(ctx, opts,
+		return commonListHandler(ctx, opts, logger, "solidserver_ip_find_free",
 			func(c context.Context, _ string, limit, offset int32) (any, error) {
 				where := fmt.Sprintf("parent_subnet_addr='%s' AND is_free='1' AND space_name='%s'", in.Subnet, in.Space)
 				authCtx := client.AuthContext(c)
@@ -144,8 +153,8 @@ func ipFindFreeHandler(client *services.APIClientWrapper) func(context.Context, 
 					Limit(limit).
 					Offset(offset)
 				resp, _, apiErr := req.Execute()
-				if apiErr.Error() != "" {
-					return nil, fmt.Errorf("%s", apiErr.Error())
+				if apiErr != nil {
+					return nil, apiErr
 				}
 				return resp, nil
 			})
@@ -153,11 +162,11 @@ func ipFindFreeHandler(client *services.APIClientWrapper) func(context.Context, 
 }
 
 //nolint:dupl // similar list logic across modules
-func ipListHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, IPListInput) (*mcp.CallToolResult, any, error) {
+func ipListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, IPListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPListInput) (*mcp.CallToolResult, any, error) {
 		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
-		return commonListHandler(ctx, opts,
+		return commonListHandler(ctx, opts, logger, "solidserver_ip_list",
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				w := fmt.Sprintf("space_name='%s'", in.Space)
 				if where != "" {
@@ -169,8 +178,8 @@ func ipListHandler(client *services.APIClientWrapper) func(context.Context, *mcp
 					Limit(limit).
 					Offset(offset)
 				resp, _, apiErr := req.Execute()
-				if apiErr.Error() != "" {
-					return nil, fmt.Errorf("%s", apiErr.Error())
+				if apiErr != nil {
+					return nil, apiErr
 				}
 				return resp, nil
 			})

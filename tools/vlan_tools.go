@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/efficientip-labs/solidserver-go-client/sdsclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -35,33 +36,33 @@ type VlanDeleteInput struct {
 }
 
 // RegisterVlanTools registers VLAN management tools.
-func RegisterVlanTools(s *mcp.Server, client *services.APIClientWrapper) {
+func RegisterVlanTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_vlan_domain_list",
 		Description: "Lists VLAN domains.",
-	}, vlanDomainListHandler(client))
+	}, vlanDomainListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_vlan_list",
 		Description: "Lists VLANs with optional filtering by domain or query.",
-	}, vlanListHandler(client))
+	}, vlanListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_vlan_create",
 		Description: "Creates a new VLAN within a specified domain.",
-	}, vlanCreateHandler(client))
+	}, vlanCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_vlan_delete",
 		Description: "Deletes a specific VLAN from a domain.",
-	}, vlanDeleteHandler(client))
+	}, vlanDeleteHandler(client, logger))
 }
 
-func vlanDomainListHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, VlanDomainListInput) (*mcp.CallToolResult, any, error) {
+func vlanDomainListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanDomainListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanDomainListInput) (*mcp.CallToolResult, any, error) {
 		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
-		return commonListHandler(ctx, opts,
+		return commonListHandler(ctx, opts, logger, "solidserver_vlan_domain_list",
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				authCtx := client.AuthContext(c)
 				req := client.VlanAPI.VlanDomainList(authCtx).Limit(limit).Offset(offset)
@@ -69,19 +70,19 @@ func vlanDomainListHandler(client *services.APIClientWrapper) func(context.Conte
 					req = req.Where(where)
 				}
 				resp, _, apiErr := req.Execute()
-				if apiErr.Error() != "" {
-					return nil, fmt.Errorf("%s", apiErr.Error())
+				if apiErr != nil {
+					return nil, apiErr
 				}
 				return resp, nil
 			})
 	}
 }
 
-func vlanListHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, VlanListInput) (*mcp.CallToolResult, any, error) {
+func vlanListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanListInput) (*mcp.CallToolResult, any, error) {
 		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
-		return commonListHandler(ctx, opts,
+		return commonListHandler(ctx, opts, logger, "solidserver_vlan_list",
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				w := ""
 				if in.Domain != "" {
@@ -101,16 +102,17 @@ func vlanListHandler(client *services.APIClientWrapper) func(context.Context, *m
 					req = req.Where(w)
 				}
 				resp, _, apiErr := req.Execute()
-				if apiErr.Error() != "" {
-					return nil, fmt.Errorf("%s", apiErr.Error())
+				if apiErr != nil {
+					return nil, apiErr
 				}
 				return resp, nil
 			})
 	}
 }
 
-func vlanCreateHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, VlanCreateInput) (*mcp.CallToolResult, any, error) {
+func vlanCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanCreateInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanCreateInput) (*mcp.CallToolResult, any, error) {
+		logger.Info("creating VLAN", "name", in.Name, "vlan_id", in.VlanID, "domain", in.Domain)
 		input := sdsclient.VlanVlanAddInput{
 			DomainName: &in.Domain,
 			VlanName:   &in.Name,
@@ -120,8 +122,8 @@ func vlanCreateHandler(client *services.APIClientWrapper) func(context.Context, 
 		authCtx := client.AuthContext(ctx)
 		req := client.VlanAPI.VlanVlanAdd(authCtx).VlanVlanAddInput(input)
 		resp, _, err := req.Execute()
-		if err.Error() != "" {
-			r, a := errorResult("SolidServer API error: %v", err.Error())
+		if err != nil {
+			r, a := errorResult("SolidServer API error: %v", err)
 			return r, a, nil
 		}
 
@@ -130,16 +132,17 @@ func vlanCreateHandler(client *services.APIClientWrapper) func(context.Context, 
 	}
 }
 
-func vlanDeleteHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, VlanDeleteInput) (*mcp.CallToolResult, any, error) {
+func vlanDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanDeleteInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanDeleteInput) (*mcp.CallToolResult, any, error) {
+		logger.Info("deleting VLAN", "name", in.Name, "domain", in.Domain)
 		authCtx := client.AuthContext(ctx)
 		req := client.VlanAPI.VlanVlanDelete(authCtx).
 			DomainName(in.Domain).
 			VlanName(in.Name)
 
 		resp, _, err := req.Execute()
-		if err.Error() != "" {
-			r, a := errorResult("SolidServer API error: %v", err.Error())
+		if err != nil {
+			r, a := errorResult("SolidServer API error: %v", err)
 			return r, a, nil
 		}
 
