@@ -4,21 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/tphakala/solidserver-mcp/services"
 )
 
 // RegisterAll registers all SolidServer tools with the MCP server.
-func RegisterAll(s *mcp.Server, client *services.APIClientWrapper) {
-	RegisterIPAMTools(s, client)
-	RegisterSubnetTools(s, client)
-	RegisterDNSTools(s, client)
-	RegisterVlanTools(s, client)
-	RegisterDhcpTools(s, client)
+func RegisterAll(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	RegisterIPAMTools(s, client, logger)
+	RegisterSubnetTools(s, client, logger)
+	RegisterDNSTools(s, client, logger)
+	RegisterVlanTools(s, client, logger)
+	RegisterDhcpTools(s, client, logger)
 }
 
 // textResult builds a simple text content result.
+//
+//nolint:unparam // anyVal is always nil; kept for signature consistency with jsonResult and errorResult.
 func textResult(format string, args ...any) (res *mcp.CallToolResult, anyVal any) {
 	text := fmt.Sprintf(format, args...)
 	return &mcp.CallToolResult{
@@ -27,7 +33,7 @@ func textResult(format string, args ...any) (res *mcp.CallToolResult, anyVal any
 				Text: text,
 			},
 		},
-	}, "ignored"
+	}, nil
 }
 
 // jsonResult builds a JSON-formatted text content result.
@@ -55,7 +61,7 @@ func errorResult(format string, args ...any) (res *mcp.CallToolResult, anyVal an
 			},
 		},
 		IsError: true,
-	}, "error"
+	}, nil
 }
 
 // ListOptions defines common parameters for list tools.
@@ -72,6 +78,8 @@ type CommonListRequester func(ctx context.Context, where string, limit, offset i
 func commonListHandler(
 	ctx context.Context,
 	opts ListOptions,
+	logger *slog.Logger,
+	toolName string,
 	execute CommonListRequester,
 ) (*mcp.CallToolResult, any, error) {
 	limit := opts.Limit
@@ -79,12 +87,15 @@ func commonListHandler(
 		limit = 50
 	}
 
+	logger.Debug("executing list tool", "tool", toolName, "where", opts.Where, "limit", limit, "offset", opts.Offset)
 	resp, err := execute(ctx, opts.Where, limit, opts.Offset)
 	if err != nil {
+		logger.Error("API error", "tool", toolName, "error", err)
 		res, anyVal := errorResult("SolidServer API error: %v", err)
 		return res, anyVal, nil
 	}
 
+	logger.Debug("tool success", "tool", toolName)
 	res, anyVal := jsonResult(resp)
 	return res, anyVal, nil
 }

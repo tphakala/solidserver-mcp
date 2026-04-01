@@ -1,5 +1,41 @@
 # SolidServer MCP Server
 
+<p align="center">
+  <!-- Project Status -->
+  <a href="https://github.com/tphakala/solidserver-mcp/releases">
+    <img src="https://img.shields.io/github/v/release/tphakala/solidserver-mcp?include_prereleases&style=flat-square&color=blue">
+  </a>
+  <a href="https://github.com/tphakala/solidserver-mcp/blob/main/LICENSE">
+    <img src="https://img.shields.io/github/license/tphakala/solidserver-mcp?style=flat-square&color=green">
+  </a>
+  <a href="https://github.com/tphakala/solidserver-mcp/actions/workflows/test.yml">
+    <img src="https://img.shields.io/github/actions/workflow/status/tphakala/solidserver-mcp/test.yml?style=flat-square&label=CI">
+  </a>
+
+  <br>
+
+  <!-- Code Quality -->
+  <a href="https://golang.org">
+    <img src="https://img.shields.io/badge/Built%20with-Go-teal?style=flat-square&logo=go">
+  </a>
+  <a href="https://goreportcard.com/report/github.com/tphakala/solidserver-mcp">
+    <img src="https://goreportcard.com/badge/github.com/tphakala/solidserver-mcp?style=flat-square">
+  </a>
+
+  <br>
+
+  <!-- Community -->
+  <a href="https://github.com/tphakala/solidserver-mcp/issues">
+    <img src="https://img.shields.io/github/issues/tphakala/solidserver-mcp?style=flat-square&color=red">
+  </a>
+  <a href="https://coderabbit.ai">
+    <img src="https://img.shields.io/coderabbit/prs/github/tphakala/solidserver-mcp?utm_source=oss&utm_medium=github&utm_campaign=tphakala%2Fsolidserver-mcp&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit+Reviews">
+  </a>
+  <a href="https://github.com/sponsors/tphakala">
+    <img src="https://img.shields.io/github/sponsors/tphakala?style=flat-square&logo=github&color=EA4AAA&label=Sponsor">
+  </a>
+</p>
+
 An MCP (Model Context Protocol) server for EfficientIP SolidServer IPAM/DNS management.
 
 ## Features
@@ -40,8 +76,8 @@ The server is configured via environment variables:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `SOLIDSERVER_HOST` | Hostname or IP of the SolidServer | Required |
-| `SOLIDSERVER_USERNAME` | API Username | Required |
-| `SOLIDSERVER_PASSWORD` | API Password | Required |
+| `SOLIDSERVER_TOKEN_ID` | API Token ID | Required |
+| `SOLIDSERVER_TOKEN_SECRET` | API Token Secret | Required |
 | `SOLIDSERVER_SSL_VERIFY` | Verify SSL certificate | `true` |
 | `MCP_TRANSPORT` | Transport mode (`stdio` or `http`) | `stdio` |
 | `MCP_HTTP_HOST` | Host/IP to bind HTTP server | `localhost` |
@@ -61,8 +97,8 @@ Designed for use with Claude Desktop, Cursor, and other local MCP clients.
       "command": "/path/to/solidserver-mcp",
       "env": {
         "SOLIDSERVER_HOST": "sds.example.com",
-        "SOLIDSERVER_USERNAME": "admin",
-        "SOLIDSERVER_PASSWORD": "yourpassword"
+        "SOLIDSERVER_TOKEN_ID": "yourtokenid",
+        "SOLIDSERVER_TOKEN_SECRET": "yourtokensecret"
       }
     }
   }
@@ -76,19 +112,21 @@ For remote deployment or shared contexts.
 ```bash
 export MCP_TRANSPORT=http
 export SOLIDSERVER_HOST=sds.example.com
-export SOLIDSERVER_USERNAME=admin
-export SOLIDSERVER_PASSWORD=yourpassword
+export SOLIDSERVER_TOKEN_ID=yourtokenid
+export SOLIDSERVER_TOKEN_SECRET=yourtokensecret
 ./solidserver-mcp
 ```
 
 ## Development
 
-Requires Go 1.24.
+Requires Go 1.26.
 
-- **Build**: `task build`
-- **Lint**: `task lint`
-- **Tidy**: `task tidy`
-- **Docker/Podman Build**: `task docker-build`
+- **Check** (fmt + vet + lint + test): `task check`
+- **Build**: `task go:build`
+- **Lint**: `task go:lint`
+- **Format**: `task go:fmt`
+- **Tidy**: `task go:tidy`
+- **Container image**: `task image:build` (override tool: `CONTAINER_TOOL=docker task image:build`)
 
 ## License
 

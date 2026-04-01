@@ -8,35 +8,35 @@ import (
 
 // Config holds the configuration for the SolidServer MCP server.
 type Config struct {
-	Host       string
-	Username   string
-	Password   string
-	SSLVerify  bool
-	Transport  string // "stdio" or "http"
-	HTTPPort   int
-	HTTPHost   string
-	LogLevel   string // "debug", "info", "warn", "error"
+	Host        string
+	TokenID     string
+	TokenSecret string
+	SSLVerify   bool
+	Transport   string // "stdio" or "http"
+	HTTPPort    int
+	HTTPHost    string
+	LogLevel    string // "debug", "info", "warn", "error"
 }
 
 // LoadConfig reads configuration from environment variables.
 func LoadConfig() (Config, error) {
 	cfg := Config{
-		Host:      os.Getenv("SOLIDSERVER_HOST"),
-		Username:  os.Getenv("SOLIDSERVER_USERNAME"),
-		Password:  os.Getenv("SOLIDSERVER_PASSWORD"),
-		Transport: os.Getenv("MCP_TRANSPORT"),
-		LogLevel:  os.Getenv("LOG_LEVEL"),
-		HTTPHost:  os.Getenv("MCP_HTTP_HOST"),
+		Host:        os.Getenv("SOLIDSERVER_HOST"),
+		TokenID:     os.Getenv("SOLIDSERVER_TOKEN_ID"),
+		TokenSecret: os.Getenv("SOLIDSERVER_TOKEN_SECRET"),
+		Transport:   os.Getenv("MCP_TRANSPORT"),
+		LogLevel:    os.Getenv("LOG_LEVEL"),
+		HTTPHost:    os.Getenv("MCP_HTTP_HOST"),
 	}
 
 	if cfg.Host == "" {
 		return Config{}, fmt.Errorf("SOLIDSERVER_HOST environment variable is required")
 	}
-	if cfg.Username == "" {
-		return Config{}, fmt.Errorf("SOLIDSERVER_USERNAME environment variable is required")
+	if cfg.TokenID == "" {
+		return Config{}, fmt.Errorf("SOLIDSERVER_TOKEN_ID environment variable is required")
 	}
-	if cfg.Password == "" {
-		return Config{}, fmt.Errorf("SOLIDSERVER_PASSWORD environment variable is required")
+	if cfg.TokenSecret == "" {
+		return Config{}, fmt.Errorf("SOLIDSERVER_TOKEN_SECRET environment variable is required")
 	}
 
 	if cfg.Transport == "" {

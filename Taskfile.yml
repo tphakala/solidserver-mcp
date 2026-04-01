@@ -2,46 +2,84 @@ version: '3'
 
 vars:
   BINARY_NAME: solidserver-mcp
-  DOCKER_IMAGE: solidserver-mcp
+  IMAGE_NAME: solidserver-mcp
+  CONTAINER_TOOL: podman  # override: CONTAINER_TOOL=docker task image:build
 
 tasks:
-  build:
+
+  # ── Composites ──────────────────────────────────────────────────────────────
+
+  default:
+    desc: Run all local checks (fmt, tidy, vet, lint, test)
+    cmds:
+      - task: check
+
+  check:
+    desc: Run all local checks (fmt, tidy, vet, lint, test)
+    cmds:
+      - task: go:fmt
+      - task: go:tidy
+      - task: go:vet
+      - task: go:lint
+      - task: go:test
+
+  ci:
+    desc: Full CI pipeline — check then build
+    cmds:
+      - task: check
+      - task: go:build
+
+  # ── Go ──────────────────────────────────────────────────────────────────────
+
+  go:build:
     desc: Build the binary
+    sources:
+      - '**/*.go'
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.BINARY_NAME}}'
     cmds:
       - go build -o {{.BINARY_NAME}} .
 
-  run:
+  go:run:
     desc: Run the server in stdio mode (requires env vars)
     cmds:
       - go run .
 
-  test:
-    desc: Run tests
+  go:test:
+    desc: Run tests with race detector
     cmds:
-      - go test -v ./...
+      - go test -v -race ./...
 
-  lint:
+  go:vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  go:lint:
     desc: Run golangci-lint
     cmds:
       - golangci-lint run
 
-  clean:
+  go:fmt:
+    desc: Format code
+    cmds:
+      - goimports -w .
+
+  go:tidy:
+    desc: Tidy go modules
+    cmds:
+      - go mod tidy
+
+  go:clean:
     desc: Remove build artifacts
     cmds:
       - rm -f {{.BINARY_NAME}}
 
-  docker-build:
-    desc: Build Docker image
-    cmds:
-      - podman build -t {{.DOCKER_IMAGE}} .
+  # ── Image ───────────────────────────────────────────────────────────────────
 
-  fmt:
-    desc: Format code
+  image:build:
+    desc: Build container image (override with CONTAINER_TOOL=docker)
     cmds:
-      - go fmt ./...
-      - goimports -w .
-
-  tidy:
-    desc: Tidy go modules
-    cmds:
-      - go mod tidy
+      - '{{.CONTAINER_TOOL}} build -t {{.IMAGE_NAME}} .'
