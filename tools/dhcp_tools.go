@@ -81,6 +81,7 @@ func RegisterDhcpTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 
 func dhcpServerListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpServerListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpServerListInput) (*mcp.CallToolResult, any, error) {
+		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
 		return commonListHandler(ctx, opts, logger, "solidserver_dhcp_server_list",
 			func(c context.Context, where string, limit, offset int32) (any, error) {
@@ -100,6 +101,7 @@ func dhcpServerListHandler(client *services.APIClientWrapper, logger *slog.Logge
 
 func dhcpScopeListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpScopeListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpScopeListInput) (*mcp.CallToolResult, any, error) {
+		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
 		return commonListHandler(ctx, opts, logger, "solidserver_dhcp_scope_list",
 			func(c context.Context, where string, limit, offset int32) (any, error) {
@@ -119,6 +121,7 @@ func dhcpScopeListHandler(client *services.APIClientWrapper, logger *slog.Logger
 
 func dhcpRangeListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpRangeListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpRangeListInput) (*mcp.CallToolResult, any, error) {
+		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
 		return commonListHandler(ctx, opts, logger, "solidserver_dhcp_range_list",
 			func(c context.Context, where string, limit, offset int32) (any, error) {
@@ -138,6 +141,7 @@ func dhcpRangeListHandler(client *services.APIClientWrapper, logger *slog.Logger
 
 func dhcpLeaseListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpLeaseListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpLeaseListInput) (*mcp.CallToolResult, any, error) {
+		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
 		return commonListHandler(ctx, opts, logger, "solidserver_dhcp_lease_list",
 			func(c context.Context, where string, limit, offset int32) (any, error) {

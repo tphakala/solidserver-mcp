@@ -23,6 +23,8 @@ func RegisterAll(s *mcp.Server, client *services.APIClientWrapper, logger *slog.
 }
 
 // textResult builds a simple text content result.
+//
+//nolint:unparam // anyVal is always nil; kept for signature consistency with jsonResult and errorResult.
 func textResult(format string, args ...any) (res *mcp.CallToolResult, anyVal any) {
 	text := fmt.Sprintf(format, args...)
 	return &mcp.CallToolResult{
