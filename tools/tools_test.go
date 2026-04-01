@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -69,7 +70,7 @@ func TestCommonListHandler(t *testing.T) {
 		return map[string]string{"result": "ok"}, nil
 	}
 
-	res, _, err := commonListHandler(t.Context(), ListOptions{Where: "name='test'", Limit: 10, Offset: 5}, mockExecuteSuccess)
+	res, _, err := commonListHandler(t.Context(), ListOptions{Where: "name='test'", Limit: 10, Offset: 5}, slog.Default(), "test_tool", mockExecuteSuccess)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -85,14 +86,14 @@ func TestCommonListHandler(t *testing.T) {
 		return map[string]string{}, nil
 	}
 
-	_, _, _ = commonListHandler(t.Context(), ListOptions{Limit: 0}, mockExecuteDefaultLimit)
+	_, _, _ = commonListHandler(t.Context(), ListOptions{Limit: 0}, slog.Default(), "test_tool", mockExecuteDefaultLimit)
 
 	// Test error case
 	mockExecuteError := func(ctx context.Context, where string, limit, offset int32) (any, error) {
 		return nil, errors.New("API failure")
 	}
 
-	resErr, _, err := commonListHandler(t.Context(), ListOptions{}, mockExecuteError)
+	resErr, _, err := commonListHandler(t.Context(), ListOptions{}, slog.Default(), "test_tool", mockExecuteError)
 	if err != nil {
 		t.Fatalf("expected error to be handled and returned in CallToolResult, but got actual error: %v", err)
 	}

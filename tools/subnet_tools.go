@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/efficientip-labs/solidserver-go-client/sdsclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -40,39 +41,39 @@ type SubnetDeleteInput struct {
 }
 
 // RegisterSubnetTools registers subnet and space management tools.
-func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper) {
+func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_subnet_list",
 		Description: "Lists subnets in a space with optional filtering.",
-	}, subnetListHandler(client))
+	}, subnetListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_subnet_info",
 		Description: "Returns detailed information for a specific subnet by ID.",
-	}, subnetInfoHandler(client))
+	}, subnetInfoHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_subnet_create",
 		Description: "Creates a new subnet within a space.",
-	}, subnetCreateHandler(client))
+	}, subnetCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_subnet_delete",
 		Description: "Deletes a specific subnet from a space.",
-	}, subnetDeleteHandler(client))
+	}, subnetDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_space_list",
 		Description: "Lists IPAM spaces.",
-	}, spaceListHandler(client))
+	}, spaceListHandler(client, logger))
 }
 
 //nolint:dupl // similar list logic across modules
-func subnetListHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, SubnetListInput) (*mcp.CallToolResult, any, error) {
+func subnetListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetListInput) (*mcp.CallToolResult, any, error) {
 		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
-		return commonListHandler(ctx, opts,
+		return commonListHandler(ctx, opts, logger, "solidserver_subnet_list",
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				w := fmt.Sprintf("site_name='%s'", in.Space)
 				if where != "" {
@@ -84,21 +85,22 @@ func subnetListHandler(client *services.APIClientWrapper) func(context.Context, 
 					Limit(limit).
 					Offset(offset)
 				resp, _, apiErr := req.Execute()
-				if apiErr.Error() != "" {
-					return nil, fmt.Errorf("%s", apiErr.Error())
+				if apiErr != nil {
+					return nil, apiErr
 				}
 				return resp, nil
 			})
 	}
 }
 
-func subnetInfoHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, SubnetInfoInput) (*mcp.CallToolResult, any, error) {
+func subnetInfoHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetInfoInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetInfoInput) (*mcp.CallToolResult, any, error) {
+		logger.Debug("getting subnet info", "id", in.ID)
 		authCtx := client.AuthContext(ctx)
 		req := client.IpamAPI.IpamNetworkInfo(authCtx).NetworkId(in.ID)
 		resp, _, err := req.Execute()
-		if err.Error() != "" {
-			r, a := errorResult("SolidServer API error: %v", err.Error())
+		if err != nil {
+			r, a := errorResult("SolidServer API error: %v", err)
 			return r, a, nil
 		}
 
@@ -107,8 +109,9 @@ func subnetInfoHandler(client *services.APIClientWrapper) func(context.Context, 
 	}
 }
 
-func subnetCreateHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, SubnetCreateInput) (*mcp.CallToolResult, any, error) {
+func subnetCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetCreateInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetCreateInput) (*mcp.CallToolResult, any, error) {
+		logger.Info("creating subnet", "name", in.Name, "address", in.Address, "prefix", in.Prefix, "space", in.Space)
 		input := sdsclient.IpamNetworkAddInput{
 			SpaceName:     &in.Space,
 			NetworkAddr:   &in.Address,
@@ -119,8 +122,8 @@ func subnetCreateHandler(client *services.APIClientWrapper) func(context.Context
 		authCtx := client.AuthContext(ctx)
 		req := client.IpamAPI.IpamNetworkAdd(authCtx).IpamNetworkAddInput(input)
 		resp, _, err := req.Execute()
-		if err.Error() != "" {
-			r, a := errorResult("SolidServer API error: %v", err.Error())
+		if err != nil {
+			r, a := errorResult("SolidServer API error: %v", err)
 			return r, a, nil
 		}
 
@@ -129,16 +132,17 @@ func subnetCreateHandler(client *services.APIClientWrapper) func(context.Context
 	}
 }
 
-func subnetDeleteHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, SubnetDeleteInput) (*mcp.CallToolResult, any, error) {
+func subnetDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetDeleteInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetDeleteInput) (*mcp.CallToolResult, any, error) {
+		logger.Info("deleting subnet", "address", in.Address, "space", in.Space)
 		authCtx := client.AuthContext(ctx)
 		req := client.IpamAPI.IpamNetworkDelete(authCtx).
 			SpaceName(in.Space).
 			NetworkAddr(in.Address)
 
 		resp, _, err := req.Execute()
-		if err.Error() != "" {
-			r, a := errorResult("SolidServer API error: %v", err.Error())
+		if err != nil {
+			r, a := errorResult("SolidServer API error: %v", err)
 			return r, a, nil
 		}
 
@@ -148,11 +152,11 @@ func subnetDeleteHandler(client *services.APIClientWrapper) func(context.Context
 }
 
 //nolint:dupl // similar list logic across modules
-func spaceListHandler(client *services.APIClientWrapper) func(context.Context, *mcp.CallToolRequest, SpaceListInput) (*mcp.CallToolResult, any, error) {
+func spaceListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SpaceListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SpaceListInput) (*mcp.CallToolResult, any, error) {
 		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
-		return commonListHandler(ctx, opts,
+		return commonListHandler(ctx, opts, logger, "solidserver_space_list",
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				authCtx := client.AuthContext(c)
 				req := client.IpamAPI.IpamSpaceList(authCtx).Limit(limit).Offset(offset)
@@ -160,8 +164,8 @@ func spaceListHandler(client *services.APIClientWrapper) func(context.Context, *
 					req = req.Where(where)
 				}
 				resp, _, apiErr := req.Execute()
-				if apiErr.Error() != "" {
-					return nil, fmt.Errorf("%s", apiErr.Error())
+				if apiErr != nil {
+					return nil, apiErr
 				}
 				return resp, nil
 			})
