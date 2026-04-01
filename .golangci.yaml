@@ -52,6 +52,11 @@ linters:
     - wastedassign
   disable:
     - unused
+  exclusions:
+    rules:
+      - path: 'tools/.*\.go'
+        linters:
+          - dupl
   settings:
     dupl:
       threshold: 120
@@ -89,10 +94,6 @@ linters:
       # Check exhaustiveness of enum switch statements
       default-signifies-exhaustive: true
 issues:
-  exclude-rules:
-    - path: 'tools/.*\.go'
-      linters:
-        - dupl
   max-issues-per-linter: 0
   max-same-issues: 0
   uniq-by-line: true

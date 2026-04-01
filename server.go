@@ -25,14 +25,14 @@ const (
 )
 
 // buildServer creates and configures an MCP server with all tool handlers registered.
-func buildServer(client *services.APIClientWrapper) *mcp.Server {
+func buildServer(client *services.APIClientWrapper, logger *slog.Logger) *mcp.Server {
 	s := mcp.NewServer(
 		&mcp.Implementation{Name: "solidserver-mcp", Version: version},
 		&mcp.ServerOptions{Instructions: serverInstructions},
 	)
 
 	// Tool registration
-	tools.RegisterAll(s, client)
+	tools.RegisterAll(s, client, logger)
 
 	return s
 }
@@ -53,26 +53,26 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 
 // runStdio starts the MCP server on stdin/stdout.
 func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger) error {
-	client, err := services.NewSolidServerClient(cfg.Host, cfg.Username, cfg.Password, cfg.SSLVerify)
+	client, err := services.NewSolidServerClient(cfg.Host, cfg.TokenID, cfg.TokenSecret, cfg.SSLVerify)
 	if err != nil {
 		return fmt.Errorf("creating solidserver client: %w", err)
 	}
 
-	s := buildServer(client)
+	s := buildServer(client, logger)
 	logger.Info("solidserver-mcp ready", "transport", "stdio")
 	return s.Run(ctx, &mcp.StdioTransport{})
 }
 
 // runHTTP starts the MCP server over HTTP with streamable transport.
 func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger) error {
-	client, err := services.NewSolidServerClient(cfg.Host, cfg.Username, cfg.Password, cfg.SSLVerify)
+	client, err := services.NewSolidServerClient(cfg.Host, cfg.TokenID, cfg.TokenSecret, cfg.SSLVerify)
 	if err != nil {
 		return fmt.Errorf("creating solidserver client: %w", err)
 	}
 
 	// Factory function returns an *mcp.Server for each request.
 	getServer := func(r *http.Request) *mcp.Server {
-		return buildServer(client)
+		return buildServer(client, logger)
 	}
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{

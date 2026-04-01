@@ -7,24 +7,24 @@ import (
 )
 
 func TestNewSolidServerClient_MissingCredentials(t *testing.T) {
-	_, err := NewSolidServerClient("", "admin", "secret", false)
+	_, err := NewSolidServerClient("", "id", "secret", false)
 	if err == nil {
 		t.Error("expected error when host is missing")
 	}
 
 	_, err = NewSolidServerClient("host", "", "secret", false)
 	if err == nil {
-		t.Error("expected error when username is missing")
+		t.Error("expected error when token id is missing")
 	}
 
-	_, err = NewSolidServerClient("host", "admin", "", false)
+	_, err = NewSolidServerClient("host", "id", "", false)
 	if err == nil {
-		t.Error("expected error when password is missing")
+		t.Error("expected error when token secret is missing")
 	}
 }
 
 func TestNewSolidServerClient_Success(t *testing.T) {
-	client, err := NewSolidServerClient("sds.local", "admin", "secret", false)
+	client, err := NewSolidServerClient("sds.local", "id", "secret", false)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -34,23 +34,23 @@ func TestNewSolidServerClient_Success(t *testing.T) {
 }
 
 func TestAuthContext(t *testing.T) {
-	client, err := NewSolidServerClient("sds.local", "testuser", "testpass", false)
+	client, err := NewSolidServerClient("sds.local", "testid", "testsecret", false)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
 
 	ctx := client.AuthContext(t.Context())
-	val := ctx.Value(sdsclient.ContextBasicAuth)
-	
-	auth, ok := val.(sdsclient.BasicAuth)
+	val := ctx.Value(sdsclient.ContextEipApiTokenAuth)
+
+	auth, ok := val.(sdsclient.EipApiTokenAuth)
 	if !ok {
-		t.Fatalf("expected context to contain BasicAuth, got %T", val)
+		t.Fatalf("expected context to contain EipApiTokenAuth, got %T", val)
 	}
 
-	if auth.UserName != "testuser" {
-		t.Errorf("expected UserName testuser, got %q", auth.UserName)
+	if auth.Token != "testid" {
+		t.Errorf("expected Token testid, got %q", auth.Token)
 	}
-	if auth.Password != "testpass" {
-		t.Errorf("expected Password testpass, got %q", auth.Password)
+	if auth.Secret != "testsecret" {
+		t.Errorf("expected Secret testsecret, got %q", auth.Secret)
 	}
 }
