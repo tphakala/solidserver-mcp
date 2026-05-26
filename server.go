@@ -76,7 +76,8 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	}
 
 	mcpHandler := mcp.NewStreamableHTTPHandler(getServer, &mcp.StreamableHTTPOptions{
-		Logger: logger,
+		Logger:                logger,
+		CrossOriginProtection: &http.CrossOriginProtection{},
 	})
 
 	mux := http.NewServeMux()
