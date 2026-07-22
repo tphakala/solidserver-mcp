@@ -63,13 +63,8 @@ func runStdio(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	return s.Run(ctx, &mcp.StdioTransport{})
 }
 
-// runHTTP starts the MCP server over HTTP with streamable transport.
-func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger) error {
-	client, err := services.NewSolidServerClient(cfg.Host, cfg.TokenID, cfg.TokenSecret, cfg.SSLVerify)
-	if err != nil {
-		return fmt.Errorf("creating solidserver client: %w", err)
-	}
-
+// newHTTPMux builds the HTTP routes served by the http transport.
+func newHTTPMux(client *services.APIClientWrapper, logger *slog.Logger) *http.ServeMux {
 	// Factory function returns an *mcp.Server for each request.
 	getServer := func(r *http.Request) *mcp.Server {
 		return buildServer(client, logger)
@@ -79,8 +74,15 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 		Logger: logger,
 	})
 
+	// The MCP SDK applied a zero-value CrossOriginProtection by default up to
+	// v1.5.0 and dropped that default in v1.6.0, so the CSRF check has to be
+	// wired up explicitly now. Applying it as middleware is what the SDK
+	// recommends; the StreamableHTTPOptions.CrossOriginProtection field is
+	// deprecated.
+	protectedMCPHandler := http.NewCrossOriginProtection().Handler(mcpHandler)
+
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", mcpHandler)
+	mux.Handle("/mcp", protectedMCPHandler)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
@@ -89,6 +91,18 @@ func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 			"version":   version,
 		})
 	})
+
+	return mux
+}
+
+// runHTTP starts the MCP server over HTTP with streamable transport.
+func runHTTP(ctx context.Context, cfg *Config, logger *slog.Logger) error {
+	client, err := services.NewSolidServerClient(cfg.Host, cfg.TokenID, cfg.TokenSecret, cfg.SSLVerify)
+	if err != nil {
+		return fmt.Errorf("creating solidserver client: %w", err)
+	}
+
+	mux := newHTTPMux(client, logger)
 
 	addr := net.JoinHostPort(cfg.HTTPHost, strconv.Itoa(cfg.HTTPPort))
 	httpServer := &http.Server{
