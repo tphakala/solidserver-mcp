@@ -15,3 +15,10 @@ solidserver-mcp
 
 # OS
 .DS_Store
+
+# Plans, specs and design docs are never committed
+*-plan.md
+*-spec.md
+*-design.md
+docs/
+notes/
