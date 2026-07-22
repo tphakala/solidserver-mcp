@@ -17,6 +17,17 @@ jobs:
     permissions:
       contents: write
     steps:
+      # workflow_dispatch can be launched from a branch ref in the UI, but
+      # goreleaser refuses an untagged commit. Fail immediately with a clear
+      # message rather than after the checkout, Go setup and full test run. This
+      # is a failing step rather than a job-level `if:` so a mistaken dispatch
+      # reports red; a skipped job would show up green.
+      - name: Require a tag ref
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          echo "::error::This workflow must run on a v* tag ref, got ${{ github.ref }}"
+          exit 1
+
       - uses: actions/checkout@v6
         with:
           # goreleaser needs the full history to build the changelog.
@@ -26,6 +37,14 @@ jobs:
         uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
+
+      # Verify rather than fix. goreleaser has no `before` hook running tidy, so
+      # that a release can never publish artifacts built from a rewritten module
+      # state that differs from the tag.
+      - name: Verify go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
 
       # The tag is what gets published, so it is tested here rather than trusting
       # that the commit was green on main.

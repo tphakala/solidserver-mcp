@@ -2,9 +2,10 @@ version: 2
 
 project_name: solidserver-mcp
 
-before:
-  hooks:
-    - go mod tidy
+# No `before` hooks on purpose. Running `go mod tidy` here would let a release
+# silently rewrite go.mod and go.sum and then publish artifacts built from a
+# module state that is not the tagged one. The release workflow verifies
+# tidiness instead and fails if it differs.
 
 builds:
   - main: .
