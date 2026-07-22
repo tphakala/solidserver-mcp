@@ -1,36 +1,131 @@
-name: Test
+name: ci
 
 on:
+  # push is already filtered to main so a push to a PR branch does not run the
+  # matrix twice; pull_request covers PR branches.
   push:
     branches:
       - main
   pull_request:
 
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref so a rapid re-push does not pile up
+# duplicate in-flight runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned to match the local toolchain so local runs and CI use the same linter
+  # version, and therefore the same ruleguard behaviour.
+  GOLANGCI_LINT_VERSION: 'v2.12.2'
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: Build and test
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
-      
+
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
           go-version-file: 'go.mod'
 
-      - name: golangci-lint
+      # Building and vetting on every OS proves the server compiles
+      # cross-platform; it ships as a plain static Go binary.
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      # Linux and macOS provide the cgo C toolchain the race detector needs.
+      - name: Test (race)
+        if: matrix.os != 'windows-latest'
+        run: go test ./... -race
+
+      # No -race on Windows: the race detector needs a cgo C toolchain that the
+      # windows-latest runner does not provide on PATH.
+      - name: Test
+        if: matrix.os == 'windows-latest'
+        run: go test ./...
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Test with coverage
+        run: go test ./... -coverprofile=coverage.out -covermode=atomic
+
+      - name: Report total coverage
+        run: go tool cover -func=coverage.out | tail -1
+
+      - name: Upload coverage profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.out
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      # The ruleguard matchers in rules/*.go carry the //go:build ruleguard tag,
+      # so a syntax error in one compiles clean under the normal toolchain and
+      # silently disables the entire ruleguard layer while golangci-lint still
+      # reports 0 issues. Compile them explicitly so a broken rule fails CI
+      # instead of going unnoticed.
+      - name: Ruleguard rules compile
+        run: go build -tags ruleguard ./rules/
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Verify go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.11.4
+          version: ${{ env.GOLANGCI_LINT_VERSION }}
           args: --timeout=5m
 
-      - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+  image:
+    name: Container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
 
-      - name: Test
-        run: task go:test
-
-      - name: Build
-        run: task go:build
+      # The Dockerfile is part of the shipped surface, so a change that breaks
+      # the image build should fail here rather than at release time.
+      - name: Build image
+        run: docker build -t solidserver-mcp .

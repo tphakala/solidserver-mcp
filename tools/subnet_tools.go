@@ -44,27 +44,57 @@ type SubnetDeleteInput struct {
 func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_subnet_list",
-		Description: "Lists subnets in a space with optional filtering.",
+		Title:       "List subnets",
+		Annotations: readOnlyTool("List subnets"),
+		Description: "Enumerates subnets, optionally scoped to a space or narrowed by a where " +
+			"clause. Use this to find a subnet's name or ID before allocating an address with " +
+			"solidserver_ip_create. Returns a summary row per subnet; use solidserver_subnet_info " +
+			"instead when you already have one subnet's ID and need its full detail including " +
+			"utilisation. Returns the matching subnets as JSON.",
 	}, subnetListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_subnet_info",
-		Description: "Returns detailed information for a specific subnet by ID.",
+		Title:       "Get subnet details",
+		Annotations: readOnlyTool("Get subnet details"),
+		Description: "Returns the full detail for one subnet given its numeric ID, including size " +
+			"and usage. Requires an ID you already hold, typically from solidserver_subnet_list; it " +
+			"cannot look a subnet up by CIDR or name. Use solidserver_subnet_list instead to search " +
+			"or to enumerate. Use solidserver_ip_list to see the addresses inside the subnet rather " +
+			"than the subnet itself. Returns the subnet record as JSON.",
 	}, subnetInfoHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_subnet_create",
-		Description: "Creates a new subnet within a space.",
+		Title:       "Create a subnet",
+		Annotations: additiveTool("Create a subnet"),
+		Description: "Carves a new subnet out of an existing space. The space must already exist; " +
+			"list them with solidserver_space_list. Check for an overlapping range with " +
+			"solidserver_subnet_list first, since an overlap is rejected rather than merged. Changes " +
+			"appliance state and is undone only by solidserver_subnet_delete. Returns the created " +
+			"subnet as JSON.",
 	}, subnetCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_subnet_delete",
-		Description: "Deletes a specific subnet from a space.",
+		Title:       "Delete a subnet",
+		Annotations: destructiveTool("Delete a subnet"),
+		Description: "Permanently removes a subnet from a space. This is destructive, cannot be " +
+			"undone from this server, and takes the addresses tracked inside the subnet with it, so " +
+			"check what is allocated with solidserver_ip_list before calling it. Deleting a subnet " +
+			"that is still in use loses the record of which hosts held which addresses. Returns a " +
+			"confirmation message.",
 	}, subnetDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_space_list",
-		Description: "Lists IPAM spaces.",
+		Title:       "List IPAM spaces",
+		Annotations: readOnlyTool("List IPAM spaces"),
+		Description: "Enumerates IPAM spaces. A space is the top-level container that subnets and " +
+			"addresses live in, and separate spaces may reuse the same RFC 1918 ranges, so start " +
+			"here when you do not already know which space to work in: an address or CIDR is " +
+			"ambiguous without one. Use solidserver_subnet_list instead to see the subnets inside a " +
+			"space. Returns the space records as JSON.",
 	}, spaceListHandler(client, logger))
 }
 

@@ -10,6 +10,43 @@ import (
 	"github.com/tphakala/solidserver-mcp/services"
 )
 
+// The MCP defaults for DestructiveHint and OpenWorldHint are both true, which
+// reads identically to "the author never considered it". Every tool therefore
+// states its hints explicitly. All of these tools reach an external SolidServer
+// appliance, so OpenWorldHint is true throughout.
+
+// readOnlyTool annotates a tool that only reads state.
+func readOnlyTool(title string) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{
+		Title:         title,
+		ReadOnlyHint:  true,
+		OpenWorldHint: new(true),
+	}
+}
+
+// additiveTool annotates a tool that creates state without destroying any.
+// Not idempotent: calling it again either allocates another object or fails on
+// a duplicate.
+func additiveTool(title string) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{
+		Title:           title,
+		DestructiveHint: new(false),
+		IdempotentHint:  false,
+		OpenWorldHint:   new(true),
+	}
+}
+
+// destructiveTool annotates a tool that removes state. Idempotent in the sense
+// the spec means: deleting an already-deleted object has no further effect.
+func destructiveTool(title string) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{
+		Title:           title,
+		DestructiveHint: new(true),
+		IdempotentHint:  true,
+		OpenWorldHint:   new(true),
+	}
+}
+
 // RegisterAll registers all SolidServer tools with the MCP server.
 func RegisterAll(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
 	if logger == nil {

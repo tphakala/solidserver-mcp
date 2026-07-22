@@ -57,6 +57,16 @@ linters:
       - path: 'tools/.*\.go'
         linters:
           - dupl
+      # The handlers discard the *http.Response that sdsclient's Execute returns,
+      # which bodyclose reads as a leaked body. It is not one: the generated
+      # client already does io.ReadAll on the real body, closes it, and replaces
+      # it with an io.NopCloser over an in-memory buffer before returning (see
+      # sdsclient/api_*.go). Closing the returned value again would be a no-op on
+      # a NopCloser. These only surfaced once the handlers gained test coverage,
+      # because bodyclose traces the value through SSA and needs a caller.
+      - path: 'tools/.*_tools\.go'
+        linters:
+          - bodyclose
   settings:
     dupl:
       threshold: 120

@@ -39,22 +39,48 @@ type VlanDeleteInput struct {
 func RegisterVlanTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_vlan_domain_list",
-		Description: "Lists VLAN domains.",
+		Title:       "List VLAN domains",
+		Annotations: readOnlyTool("List VLAN domains"),
+		Description: "Enumerates the VLAN domains defined on the appliance. A VLAN domain is the " +
+			"namespace that VLAN IDs are unique within, so start here when you do not already know " +
+			"which domain to work in: both solidserver_vlan_create and solidserver_vlan_delete " +
+			"require a domain name, and a VLAN ID is ambiguous without one. Use " +
+			"solidserver_vlan_list instead to see the VLANs inside a domain. Returns the full " +
+			"domain records as JSON.",
 	}, vlanDomainListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_vlan_list",
-		Description: "Lists VLANs with optional filtering by domain or query.",
+		Title:       "List VLANs",
+		Annotations: readOnlyTool("List VLANs"),
+		Description: "Enumerates individual VLANs, optionally restricted to one domain or narrowed " +
+			"by a where clause. Use this to check whether a VLAN ID is already taken before calling " +
+			"solidserver_vlan_create, or to find the exact VLAN name that solidserver_vlan_delete " +
+			"needs. Use solidserver_vlan_domain_list instead when you need the domains themselves " +
+			"rather than their contents. Omitting the domain searches across all domains, which can " +
+			"return the same VLAN ID more than once. Returns the matching VLAN records as JSON.",
 	}, vlanListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_vlan_create",
-		Description: "Creates a new VLAN within a specified domain.",
+		Title:       "Create a VLAN",
+		Annotations: additiveTool("Create a VLAN"),
+		Description: "Creates a VLAN with the given numeric ID and name inside an existing domain. " +
+			"The domain must already exist; this tool does not create one. Check the ID is free with " +
+			"solidserver_vlan_list first, because re-running this with an ID that is already in use " +
+			"fails rather than updating the existing VLAN. Changes appliance state and is undone " +
+			"only by solidserver_vlan_delete. Returns the created VLAN record as JSON.",
 	}, vlanCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_vlan_delete",
-		Description: "Deletes a specific VLAN from a domain.",
+		Title:       "Delete a VLAN",
+		Annotations: destructiveTool("Delete a VLAN"),
+		Description: "Permanently removes a VLAN from a domain, identified by domain and VLAN name. " +
+			"This is destructive and cannot be undone from this server; the VLAN can only be " +
+			"recreated with solidserver_vlan_create, which will not restore anything that referenced " +
+			"it. Confirm the exact name with solidserver_vlan_list first, since deleting the wrong " +
+			"VLAN can black-hole traffic on the segment. Returns a confirmation message.",
 	}, vlanDeleteHandler(client, logger))
 }
 
