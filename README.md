@@ -38,6 +38,26 @@
 
 An MCP (Model Context Protocol) server for EfficientIP SolidServer IPAM/DNS management.
 
+## Installation
+
+Download a prebuilt binary for your platform from the
+[releases page](https://github.com/tphakala/solidserver-mcp/releases). Builds are
+published for Linux, macOS and Windows on amd64 and arm64, with a `checksums.txt`
+alongside them. Extract the archive and put the binary somewhere on your PATH, or
+point your MCP client straight at it (see [Stdio Mode](#stdio-mode-standard)).
+
+Build from source instead with Go 1.26 or newer:
+
+```bash
+go install github.com/tphakala/solidserver-mcp@latest
+```
+
+Or run it as a container:
+
+```bash
+docker build -t solidserver-mcp .
+```
+
 ## Features
 
 - **IPAM Tools**:

@@ -8,7 +8,11 @@ import (
 	"syscall"
 )
 
-const version = "1.0.0"
+// version is reported over MCP in the server implementation, on /health, and in
+// the startup log. Release builds overwrite it via -ldflags with the tag being
+// built, so there is no constant here to drift out of step with the tag. A
+// local or source build reports "dev".
+var version = "dev"
 
 func main() {
 	if err := runMain(); err != nil {

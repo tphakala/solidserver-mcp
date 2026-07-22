@@ -1,0 +1,48 @@
+version: 2
+
+project_name: solidserver-mcp
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - main: .
+    binary: solidserver-mcp
+    env:
+      # No cgo anywhere in the dependency tree, so a static binary keeps the
+      # release usable on musl-based distros and in scratch containers.
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      # Strip local filesystem paths out of the binary so builds are reproducible.
+      - -trimpath
+    ldflags:
+      # main.version is a var precisely so the tag lands here. .Version is the
+      # tag with the leading v removed.
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  filters:
+    exclude:
+      - '^ci:'
+      - '^test:'
+      - '^style:'
+      - '^docs?:'
+      - '^chore\(deps\): bump'
