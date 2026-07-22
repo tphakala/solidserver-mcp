@@ -1,0 +1,61 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Manual runs must be dispatched on a tag ref; goreleaser refuses untagged commits.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  goreleaser:
+    name: GoReleaser
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      # workflow_dispatch can be launched from a branch ref in the UI, but
+      # goreleaser refuses an untagged commit. Fail immediately with a clear
+      # message rather than after the checkout, Go setup and full test run. This
+      # is a failing step rather than a job-level `if:` so a mistaken dispatch
+      # reports red; a skipped job would show up green.
+      - name: Require a tag ref
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          echo "::error::This workflow must run on a v* tag ref, got ${{ github.ref }}"
+          exit 1
+
+      - uses: actions/checkout@v6
+        with:
+          # goreleaser needs the full history to build the changelog.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: 'go.mod'
+
+      # Verify rather than fix. goreleaser has no `before` hook running tidy, so
+      # that a release can never publish artifacts built from a rewritten module
+      # state that differs from the tag.
+      - name: Verify go.mod and go.sum are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      # The tag is what gets published, so it is tested here rather than trusting
+      # that the commit was green on main.
+      - name: Test before release
+        run: go test ./... -race
+
+      # SHA-pinned: this job holds contents: write, so a moving tag on a
+      # third-party action is a supply-chain risk. Dependabot updates the pin.
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
