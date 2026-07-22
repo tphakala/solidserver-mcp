@@ -12,6 +12,12 @@ const version = "1.0.0"
 
 func main() {
 	if err := runMain(); err != nil {
+		// LoadConfig failures happen before the configured logger exists, so
+		// report through a bootstrap logger. Without this a missing environment
+		// variable exits 1 with no output at all. Going through slog keeps
+		// stderr uniformly JSON so log ingestion is not broken by a stray
+		// plain-text line.
+		slog.New(slog.NewJSONHandler(os.Stderr, nil)).Error("fatal error", "error", err)
 		os.Exit(1)
 	}
 }
@@ -37,9 +43,6 @@ func runMain() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	if err := run(ctx, &cfg, logger); err != nil {
-		logger.Error("server error", "error", err)
-		return err
-	}
-	return nil
+	// Fatal errors are reported once, by main, so they are not printed twice.
+	return run(ctx, &cfg, logger)
 }

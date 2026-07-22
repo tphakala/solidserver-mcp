@@ -84,6 +84,11 @@ The server is configured via environment variables:
 | `MCP_HTTP_PORT` | Port for HTTP transport | `8080` |
 | `LOG_LEVEL` | Logging level (`debug`, `info`, `warn`, `error`) | `info` |
 
+An unset optional variable falls back to its default. A value that is set but
+malformed (an unknown transport or log level, a non-boolean `SOLIDSERVER_SSL_VERIFY`,
+a non-numeric or out-of-range `MCP_HTTP_PORT`) is rejected at startup with an
+error on stderr, so a typo cannot be silently ignored.
+
 ## Usage
 
 ### Stdio Mode (Standard)

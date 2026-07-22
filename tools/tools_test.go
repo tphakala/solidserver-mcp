@@ -33,7 +33,7 @@ func TestJsonResult(t *testing.T) {
 	if len(res.Content) != 1 {
 		t.Fatalf("expected 1 content item, got %d", len(res.Content))
 	}
-	
+
 	contentStr := fmt.Sprintf("%v", res.Content[0])
 	if !strings.Contains(contentStr, "key") || !strings.Contains(contentStr, "value") {
 		t.Errorf("expected content to contain JSON data, got %q", contentStr)
@@ -48,7 +48,7 @@ func TestErrorResult(t *testing.T) {
 	if len(res.Content) != 1 {
 		t.Fatalf("expected 1 content item, got %d", len(res.Content))
 	}
-	
+
 	contentStr := fmt.Sprintf("%v", res.Content[0])
 	if !strings.Contains(contentStr, "something failed: boom") {
 		t.Errorf("expected content to contain error message, got %q", contentStr)

@@ -4,6 +4,15 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # solidserver-go-client tags v1.8.4-1 .. v1.8.4-3 are newer than plain
+      # v1.8.4, but semver reads the suffix as a pre-release, so v1.8.4 looks
+      # like an upgrade from v1.8.4-3 while actually reverting a year of work
+      # (v1.8.4 is from October 2024, v1.8.4-3 from November 2025). Ignore it
+      # so the downgrade is not proposed. Revisit if upstream publishes v1.8.5
+      # or later.
+      - dependency-name: "github.com/efficientip-labs/solidserver-go-client"
+        versions: ["1.8.4"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
