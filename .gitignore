@@ -9,5 +9,9 @@ solidserver-mcp
 .idea/
 .vscode/
 
+# Agent tooling working directories
+.claude/
+.serena/
+
 # OS
 .DS_Store
