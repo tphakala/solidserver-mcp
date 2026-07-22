@@ -98,8 +98,14 @@ func TestMCPEndpointAllowsSameOriginPost(t *testing.T) {
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
 
-			if rec.Code == http.StatusForbidden {
-				t.Errorf("same-origin POST to /mcp was rejected as cross-origin: body %q", rec.Body.String())
+			if rec.Code != http.StatusOK {
+				t.Fatalf("same-origin POST to /mcp: got status %d, want %d (body %q)", rec.Code, http.StatusOK, rec.Body.String())
+			}
+			// Assert on the JSON-RPC reply rather than just the status, so an
+			// unregistered or renamed /mcp route fails here instead of passing
+			// on a 404 that merely is not a 403.
+			if body := rec.Body.String(); !strings.Contains(body, `"result"`) {
+				t.Errorf("same-origin POST to /mcp: got body %q, want a JSON-RPC result", body)
 			}
 		})
 	}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -13,10 +12,12 @@ const version = "1.0.0"
 
 func main() {
 	if err := runMain(); err != nil {
-		// LoadConfig failures happen before the logger exists, so report here
-		// as well. Without this a missing environment variable exits 1 with no
-		// output at all.
-		fmt.Fprintf(os.Stderr, "solidserver-mcp: %v\n", err)
+		// LoadConfig failures happen before the configured logger exists, so
+		// report through a bootstrap logger. Without this a missing environment
+		// variable exits 1 with no output at all. Going through slog keeps
+		// stderr uniformly JSON so log ingestion is not broken by a stray
+		// plain-text line.
+		slog.New(slog.NewJSONHandler(os.Stderr, nil)).Error("fatal error", "error", err)
 		os.Exit(1)
 	}
 }
