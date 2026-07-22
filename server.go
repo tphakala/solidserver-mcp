@@ -42,12 +42,12 @@ func run(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	logger.Info("solidserver-mcp starting", "version", version, "transport", cfg.Transport)
 
 	switch cfg.Transport {
-	case "stdio":
+	case TransportStdio:
 		return runStdio(ctx, cfg, logger)
-	case "http":
+	case TransportHTTP:
 		return runHTTP(ctx, cfg, logger)
 	default:
-		return fmt.Errorf("unknown transport %q: expected \"stdio\" or \"http\"", cfg.Transport)
+		return fmt.Errorf("unknown transport %q: expected %q or %q", cfg.Transport, TransportStdio, TransportHTTP)
 	}
 }
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -12,6 +13,10 @@ const version = "1.0.0"
 
 func main() {
 	if err := runMain(); err != nil {
+		// LoadConfig failures happen before the logger exists, so report here
+		// as well. Without this a missing environment variable exits 1 with no
+		// output at all.
+		fmt.Fprintf(os.Stderr, "solidserver-mcp: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -37,9 +42,6 @@ func runMain() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	if err := run(ctx, &cfg, logger); err != nil {
-		logger.Error("server error", "error", err)
-		return err
-	}
-	return nil
+	// Fatal errors are reported once, by main, so they are not printed twice.
+	return run(ctx, &cfg, logger)
 }
