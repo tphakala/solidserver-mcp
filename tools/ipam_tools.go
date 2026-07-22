@@ -42,22 +42,50 @@ type IPListInput struct {
 func RegisterIPAMTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_ip_create",
-		Description: "Requests a new IP address allocation from a specified subnet. If hostaddr is omitted, it allocates the next free IP.",
+		Title:       "Allocate an IP address",
+		Annotations: additiveTool("Allocate an IP address"),
+		Description: "Reserves an address in a subnet and records it against a hostname. Omit " +
+			"hostaddr to take the next free address, or pass one to claim a specific address. This " +
+			"is the tool that actually takes an address out of the pool: prefer " +
+			"solidserver_ip_find_free when you only want to see what is available, since that " +
+			"reserves nothing. Two callers racing for the next free address can be handed different " +
+			"ones, so do not assume a prior find_free result is still free. Changes appliance state " +
+			"and is released only by solidserver_ip_delete. Returns the allocated address as JSON.",
 	}, ipCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_ip_delete",
-		Description: "Releases/deletes a specified IP address.",
+		Title:       "Release an IP address",
+		Annotations: destructiveTool("Release an IP address"),
+		Description: "Releases an allocated address back to its subnet's free pool and drops the " +
+			"hostname associated with it. This is destructive and cannot be undone from this server; " +
+			"the address can be re-allocated to a different host immediately afterwards. Confirm the " +
+			"address is the one you mean with solidserver_ip_list first, since releasing an address " +
+			"still configured on a live host invites a duplicate-address conflict later. Returns a " +
+			"confirmation message.",
 	}, ipDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_ip_find_free",
-		Description: "Returns a list of available free IP addresses in a subnet without allocating them.",
+		Title:       "Find free IP addresses",
+		Annotations: readOnlyTool("Find free IP addresses"),
+		Description: "Returns addresses currently free in a subnet without reserving any of them. " +
+			"Use this to plan an allocation or to report available capacity; use " +
+			"solidserver_ip_create when you actually want to claim one. The result is a snapshot " +
+			"with no hold on it, so an address listed here can be taken by someone else before you " +
+			"allocate it. Use solidserver_ip_list instead to see addresses already in use. Returns " +
+			"the free addresses as JSON.",
 	}, ipFindFreeHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_ip_list",
-		Description: "Lists IP addresses in a space/subnet with optional filtering.",
+		Title:       "List allocated IP addresses",
+		Annotations: readOnlyTool("List allocated IP addresses"),
+		Description: "Enumerates addresses already recorded in a space or subnet, optionally " +
+			"narrowed by a where clause. Use this to find which host holds an address, to confirm an " +
+			"allocation before calling solidserver_ip_delete, or to audit usage. Use " +
+			"solidserver_ip_find_free instead to see what is still available: this tool reports what " +
+			"is taken, not what is free. Returns the matching address records as JSON.",
 	}, ipListHandler(client, logger))
 }
 

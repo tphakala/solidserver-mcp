@@ -44,22 +44,49 @@ type DNSZoneListInput struct {
 func RegisterDNSTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dns_record_create",
-		Description: "Creates a new DNS resource record (A, AAAA, CNAME, etc.).",
+		Title:       "Create a DNS record",
+		Annotations: additiveTool("Create a DNS record"),
+		Description: "Adds a resource record (A, AAAA, CNAME, MX, TXT and so on) to an existing DNS " +
+			"zone. The zone must already exist; find it with solidserver_dns_zone_list. This adds a " +
+			"record rather than replacing one, so calling it twice for the same name can leave two " +
+			"records answering the same query: check with solidserver_dns_record_list first if the " +
+			"name may already resolve. Publishing a record changes what resolvers hand out, and " +
+			"clients may cache the answer for the record's TTL after it is later removed. Returns " +
+			"the created record as JSON.",
 	}, dnsRecordCreateHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dns_record_delete",
-		Description: "Deletes a specific DNS resource record.",
+		Title:       "Delete a DNS record",
+		Annotations: destructiveTool("Delete a DNS record"),
+		Description: "Permanently removes one resource record from a zone. This is destructive and " +
+			"cannot be undone from this server. Resolve the exact record first with " +
+			"solidserver_dns_record_list, because a name can carry several records and removing the " +
+			"wrong one takes a live name out of service. Resolvers may keep serving the old answer " +
+			"until its TTL expires, so the effect is not immediate everywhere. Returns a " +
+			"confirmation message.",
 	}, dnsRecordDeleteHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dns_record_list",
-		Description: "Lists DNS records with filtering.",
+		Title:       "List DNS records",
+		Annotations: readOnlyTool("List DNS records"),
+		Description: "Enumerates individual resource records, optionally narrowed by a where clause. " +
+			"Use this to resolve what a name currently points at, to confirm a record exists before " +
+			"calling solidserver_dns_record_delete, or to check for a conflict before " +
+			"solidserver_dns_record_create. Use solidserver_dns_zone_list instead when you need the " +
+			"zones themselves rather than the records inside them. Returns the matching records as " +
+			"JSON.",
 	}, dnsRecordListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dns_zone_list",
-		Description: "Lists DNS zones.",
+		Title:       "List DNS zones",
+		Annotations: readOnlyTool("List DNS zones"),
+		Description: "Enumerates the DNS zones hosted on the appliance. Start here when you do not " +
+			"already know the zone name, since solidserver_dns_record_create requires one and a " +
+			"record name is meaningless without its zone. Use solidserver_dns_record_list instead to " +
+			"see the records within a zone. Returns the zone records as JSON.",
 	}, dnsZoneListHandler(client, logger))
 }
 

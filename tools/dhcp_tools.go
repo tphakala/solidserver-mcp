@@ -50,32 +50,70 @@ type DhcpStaticDeleteInput struct {
 func RegisterDhcpTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dhcp_server_list",
-		Description: "Lists DHCP servers.",
+		Title:       "List DHCP servers",
+		Annotations: readOnlyTool("List DHCP servers"),
+		Description: "Enumerates the DHCP servers the appliance manages. Start here when you do not " +
+			"already know the server name, since solidserver_dhcp_static_add and " +
+			"solidserver_dhcp_static_delete both require one. Use solidserver_dhcp_scope_list " +
+			"instead to see the scopes configured on a server. Returns the server records as JSON.",
 	}, dhcpServerListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dhcp_scope_list",
-		Description: "Lists DHCP scopes.",
+		Title:       "List DHCP scopes",
+		Annotations: readOnlyTool("List DHCP scopes"),
+		Description: "Enumerates DHCP scopes, the per-subnet configuration blocks that hold options " +
+			"and ranges. Use this to see which subnets a server actually serves. Use " +
+			"solidserver_dhcp_range_list instead for the address ranges handed out within a scope, " +
+			"and solidserver_dhcp_lease_list for the leases currently held. Returns the scope " +
+			"records as JSON.",
 	}, dhcpScopeListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dhcp_range_list",
-		Description: "Lists DHCP ranges.",
+		Title:       "List DHCP ranges",
+		Annotations: readOnlyTool("List DHCP ranges"),
+		Description: "Enumerates the address ranges DHCP allocates from. Use this to see the dynamic " +
+			"pool boundaries, for instance to pick a static reservation address that sits outside " +
+			"the pool before calling solidserver_dhcp_static_add. Describes configured ranges, not " +
+			"live assignments: use solidserver_dhcp_lease_list for what is currently leased. Returns " +
+			"the range records as JSON.",
 	}, dhcpRangeListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dhcp_lease_list",
-		Description: "Lists DHCP leases.",
+		Title:       "List DHCP leases",
+		Annotations: readOnlyTool("List DHCP leases"),
+		Description: "Enumerates leases DHCP has currently handed out, tying an address to the " +
+			"client MAC holding it. Use this to find which device is on an address right now, or to " +
+			"recover a MAC for a static reservation. Leases expire and are reassigned, so this is a " +
+			"point-in-time view rather than stable inventory; use solidserver_ip_list for recorded " +
+			"IPAM allocations instead. Returns the lease records as JSON.",
 	}, dhcpLeaseListHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dhcp_static_add",
-		Description: "Adds a static DHCP reservation.",
+		Title:       "Add a static DHCP reservation",
+		Annotations: additiveTool("Add a static DHCP reservation"),
+		Description: "Pins an address to a specific client MAC on a DHCP server, so that client " +
+			"always receives the same address. The server must already exist; list them with " +
+			"solidserver_dhcp_server_list. Prefer an address outside the dynamic range, which " +
+			"solidserver_dhcp_range_list will show you, since reserving one inside the pool can " +
+			"collide with a lease already issued to another client. Changes appliance state and is " +
+			"undone only by solidserver_dhcp_static_delete. Returns the created reservation as JSON.",
 	}, dhcpStaticAddHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dhcp_static_delete",
-		Description: "Deletes a static DHCP reservation.",
+		Title:       "Delete a static DHCP reservation",
+		Annotations: destructiveTool("Delete a static DHCP reservation"),
+		Description: "Permanently removes a static DHCP reservation, identified by server and " +
+			"reservation name. This is destructive and cannot be undone from this server; the " +
+			"reservation can only be recreated with solidserver_dhcp_static_add. The client keeps " +
+			"its current lease until that lease expires and then falls back to a dynamic address, so " +
+			"a device expected to be reachable at a fixed address will move. Check what the client " +
+			"currently holds with solidserver_dhcp_lease_list first; this delete does not verify " +
+			"which MAC the reservation belonged to. Returns a confirmation message.",
 	}, dhcpStaticDeleteHandler(client, logger))
 }
 
