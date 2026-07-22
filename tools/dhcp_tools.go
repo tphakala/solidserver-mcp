@@ -163,9 +163,9 @@ func dhcpStaticAddHandler(client *services.APIClientWrapper, logger *slog.Logger
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpStaticAddInput) (*mcp.CallToolResult, any, error) {
 		logger.Info("adding static DHCP reservation", "name", in.Name, "ip", in.IP, "mac", in.MAC, "server", in.Server)
 		input := sdsclient.DhcpStaticAddInput{
-			ServerName: &in.Server,
-			StaticName: &in.Name,
-			StaticAddr: &in.IP,
+			ServerName:    &in.Server,
+			StaticName:    &in.Name,
+			StaticAddr:    &in.IP,
 			StaticMacAddr: &in.MAC,
 		}
 
