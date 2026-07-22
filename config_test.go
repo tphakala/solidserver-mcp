@@ -104,6 +104,12 @@ func TestLoadConfig_InvalidValues(t *testing.T) {
 			t.Setenv(envHost, testHost)
 			t.Setenv(envTokenID, "token-id")
 			t.Setenv(envTokenSecret, "token-secret")
+			// Clear the other optional variables so a malformed value
+			// inherited from the test process cannot trip an earlier check
+			// and mask the one under test.
+			for _, optional := range []string{envTransport, envLogLevel, envHTTPHost, envSSLVerify, envHTTPPort} {
+				t.Setenv(optional, "")
+			}
 			t.Setenv(tt.env, tt.value)
 
 			_, err := LoadConfig()
