@@ -81,6 +81,19 @@ func (f *fakeAppliance) count() int {
 	return len(f.requests)
 }
 
+// paths returns a copy of the recorded request paths. The test server writes
+// f.requests from its own goroutine, so callers must not reach into the slice
+// directly even after the response has been read.
+func (f *fakeAppliance) paths() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.requests))
+	for i, r := range f.requests {
+		out[i] = r.path
+	}
+	return out
+}
+
 func testLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
 // handlerCase drives one tool handler against the fake appliance. invoke wraps
@@ -243,14 +256,15 @@ func TestIPCreateFindsFreeAddress(t *testing.T) {
 	if res.IsError {
 		t.Fatalf("expected success, got error result: %s", resultText(res))
 	}
-	if fake.count() != 2 {
-		t.Fatalf("expected a list call then an add call, got %d request(s)", fake.count())
+	got := fake.paths()
+	if len(got) != 2 {
+		t.Fatalf("expected a list call then an add call, got %d request(s)", len(got))
 	}
-	if got := fake.requests[0].path; got != pathAddrList {
-		t.Errorf("first call was %s, want the free-address lookup", got)
+	if got[0] != pathAddrList {
+		t.Errorf("first call was %s, want the free-address lookup", got[0])
 	}
-	if got := fake.requests[1].path; got != pathAddrAdd {
-		t.Errorf("second call was %s, want the allocation", got)
+	if got[1] != pathAddrAdd {
+		t.Errorf("second call was %s, want the allocation", got[1])
 	}
 }
 

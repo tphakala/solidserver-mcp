@@ -107,13 +107,14 @@ func RegisterDhcpTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 		Name:        "solidserver_dhcp_static_delete",
 		Title:       "Delete a static DHCP reservation",
 		Annotations: destructiveTool("Delete a static DHCP reservation"),
-		Description: "Permanently removes a static DHCP reservation, identified by server and " +
-			"reservation name. This is destructive and cannot be undone from this server; the " +
+		Description: "Permanently removes a static DHCP reservation, identified by the DHCP server " +
+			"and the reserved IP address. This is destructive and cannot be undone from this server; the " +
 			"reservation can only be recreated with solidserver_dhcp_static_add. The client keeps " +
 			"its current lease until that lease expires and then falls back to a dynamic address, so " +
-			"a device expected to be reachable at a fixed address will move. Check what the client " +
-			"currently holds with solidserver_dhcp_lease_list first; this delete does not verify " +
-			"which MAC the reservation belonged to. Returns a confirmation message.",
+			"a device expected to be reachable at a fixed address will move. Confirm the address is " +
+			"the reservation you mean with solidserver_dhcp_lease_list first; this delete matches on " +
+			"the address alone and does not verify which MAC the reservation belonged to. Returns a " +
+			"confirmation message.",
 	}, dhcpStaticDeleteHandler(client, logger))
 }
 
