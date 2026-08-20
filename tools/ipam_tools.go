@@ -89,8 +89,58 @@ func RegisterIPAMTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 	}, ipListHandler(client, logger))
 }
 
+func validateIPCreateInput(in *IPCreateInput) error {
+	if err := ValidateRequiredString(in.Space, "space"); err != nil {
+		return err
+	}
+	if err := ValidateIP(in.Subnet, "subnet"); err != nil {
+		return err
+	}
+	if in.Hostaddr != "" {
+		if err := ValidateIP(in.Hostaddr, "hostaddr"); err != nil {
+			return err
+		}
+	}
+	if in.Mac != "" {
+		if err := ValidateMAC(in.Mac, "mac"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func findFirstFreeIP(ctx context.Context, client *services.APIClientWrapper, space, subnet string, logger *slog.Logger) (freeIP *string, res *mcp.CallToolResult, anyVal any) {
+	where := fmt.Sprintf("parent_subnet_addr='%s' AND is_free='1' AND space_name='%s'",
+		EscapeWhereValue(subnet), EscapeWhereValue(space))
+	logger.Debug("searching for free IP", "subnet", subnet, "space", space)
+	authCtx := client.AuthContext(ctx)
+	listReq := client.IpamAPI.IpamAddressList(authCtx).Where(where).Limit(1)
+	listResp, _, apiErr := listReq.Execute()
+	if apiErr != nil {
+		r, a := errorResult("failed to find free IP in subnet %s: %v", subnet, apiErr)
+		return nil, r, a
+	}
+
+	if len(listResp.Data) == 0 {
+		r, a := errorResult("no free IP found in subnet: %s", subnet)
+		return nil, r, a
+	}
+
+	firstFree := listResp.Data[0].AddressHostaddr
+	if firstFree == nil {
+		r, a := errorResult("found IP entry in subnet %s but it has no address", subnet)
+		return nil, r, a
+	}
+	logger.Debug("found free IP", "ip", *firstFree)
+	return firstFree, nil, nil
+}
+
 func ipCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, IPCreateInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPCreateInput) (*mcp.CallToolResult, any, error) {
+		if err := validateIPCreateInput(&in); err != nil {
+			return validationErrorResult(err)
+		}
+
 		input := sdsclient.IpamAddressAddInput{
 			SpaceName: &in.Space,
 		}
@@ -100,29 +150,11 @@ func ipCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) fun
 		if in.Hostaddr != "" {
 			input.AddressHostaddr = &in.Hostaddr
 		} else {
-			// Find a free IP from the specified subnet
-			where := fmt.Sprintf("parent_subnet_addr='%s' AND is_free='1' AND space_name='%s'", in.Subnet, in.Space)
-			logger.Debug("searching for free IP", "subnet", in.Subnet, "space", in.Space)
-			listReq := client.IpamAPI.IpamAddressList(authCtx).Where(where).Limit(1)
-			listResp, _, apiErr := listReq.Execute()
-			if apiErr != nil {
-				r, a := errorResult("failed to find free IP in subnet %s: %v", in.Subnet, apiErr)
-				return r, a, nil
+			freeIP, res, anyVal := findFirstFreeIP(ctx, client, in.Space, in.Subnet, logger)
+			if res != nil {
+				return res, anyVal, nil
 			}
-
-			if len(listResp.Data) == 0 {
-				r, a := errorResult("no free IP found in subnet: %s", in.Subnet)
-				return r, a, nil
-			}
-
-			// Use the first available IP
-			firstFreeIP := listResp.Data[0].AddressHostaddr
-			if firstFreeIP == nil {
-				r, a := errorResult("found IP entry in subnet %s but it has no address", in.Subnet)
-				return r, a, nil
-			}
-			input.AddressHostaddr = firstFreeIP
-			logger.Debug("found free IP", "ip", *firstFreeIP)
+			input.AddressHostaddr = freeIP
 		}
 
 		if in.Name != "" {
@@ -147,6 +179,13 @@ func ipCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) fun
 
 func ipDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, IPDeleteInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPDeleteInput) (*mcp.CallToolResult, any, error) {
+		if err := ValidateRequiredString(in.Space, "space"); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateIP(in.IPAddress, "ip_address"); err != nil {
+			return validationErrorResult(err)
+		}
+
 		logger.Info("deleting IP address", "ip", in.IPAddress, "space", in.Space)
 		authCtx := client.AuthContext(ctx)
 		req := client.IpamAPI.IpamAddressDelete(authCtx).
@@ -166,6 +205,13 @@ func ipDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) fun
 
 func ipFindFreeHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, IPFindFreeInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPFindFreeInput) (*mcp.CallToolResult, any, error) {
+		if err := ValidateRequiredString(in.Space, "space"); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateIP(in.Subnet, "subnet"); err != nil {
+			return validationErrorResult(err)
+		}
+
 		limit := in.Limit
 		if limit <= 0 {
 			limit = 10
@@ -174,7 +220,8 @@ func ipFindFreeHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 		opts := ListOptions{Limit: limit, Offset: in.Offset}
 		return commonListHandler(ctx, opts, logger, "solidserver_ip_find_free",
 			func(c context.Context, _ string, limit, offset int32) (any, error) {
-				where := fmt.Sprintf("parent_subnet_addr='%s' AND is_free='1' AND space_name='%s'", in.Subnet, in.Space)
+				where := fmt.Sprintf("parent_subnet_addr='%s' AND is_free='1' AND space_name='%s'",
+					EscapeWhereValue(in.Subnet), EscapeWhereValue(in.Space))
 				authCtx := client.AuthContext(c)
 				req := client.IpamAPI.IpamAddressList(authCtx).
 					Where(where).
@@ -192,11 +239,15 @@ func ipFindFreeHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 //nolint:dupl // similar list logic across modules
 func ipListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, IPListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPListInput) (*mcp.CallToolResult, any, error) {
+		if err := ValidateRequiredString(in.Space, "space"); err != nil {
+			return validationErrorResult(err)
+		}
+
 		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
 		return commonListHandler(ctx, opts, logger, "solidserver_ip_list",
 			func(c context.Context, where string, limit, offset int32) (any, error) {
-				w := fmt.Sprintf("space_name='%s'", in.Space)
+				w := fmt.Sprintf("space_name='%s'", EscapeWhereValue(in.Space))
 				if where != "" {
 					w = fmt.Sprintf("(%s) AND (%s)", w, where)
 				}

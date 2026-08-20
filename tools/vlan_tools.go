@@ -112,7 +112,7 @@ func vlanListHandler(client *services.APIClientWrapper, logger *slog.Logger) fun
 			func(c context.Context, where string, limit, offset int32) (any, error) {
 				w := ""
 				if in.Domain != "" {
-					w = fmt.Sprintf("domain_name='%s'", in.Domain)
+					w = fmt.Sprintf("domain_name='%s'", EscapeWhereValue(in.Domain))
 				}
 				if where != "" {
 					if w != "" {
@@ -138,6 +138,16 @@ func vlanListHandler(client *services.APIClientWrapper, logger *slog.Logger) fun
 
 func vlanCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanCreateInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanCreateInput) (*mcp.CallToolResult, any, error) {
+		if err := ValidateRequiredString(in.Domain, "domain"); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateRequiredString(in.Name, "name"); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateVlanID(in.VlanID); err != nil {
+			return validationErrorResult(err)
+		}
+
 		logger.Info("creating VLAN", "name", in.Name, "vlan_id", in.VlanID, "domain", in.Domain)
 		input := sdsclient.VlanVlanAddInput{
 			DomainName: &in.Domain,
@@ -160,6 +170,13 @@ func vlanCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 
 func vlanDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanDeleteInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanDeleteInput) (*mcp.CallToolResult, any, error) {
+		if err := ValidateRequiredString(in.Domain, "domain"); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateRequiredString(in.Name, "name"); err != nil {
+			return validationErrorResult(err)
+		}
+
 		logger.Info("deleting VLAN", "name", in.Name, "domain", in.Domain)
 		authCtx := client.AuthContext(ctx)
 		req := client.VlanAPI.VlanVlanDelete(authCtx).

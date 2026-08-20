@@ -200,6 +200,19 @@ func dhcpLeaseListHandler(client *services.APIClientWrapper, logger *slog.Logger
 
 func dhcpStaticAddHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpStaticAddInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpStaticAddInput) (*mcp.CallToolResult, any, error) {
+		if err := ValidateRequiredString(in.Server, "server"); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateRequiredString(in.Name, "name"); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateIP(in.IP, "ip"); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateDHCPMAC(in.MAC, "mac"); err != nil {
+			return validationErrorResult(err)
+		}
+
 		logger.Info("adding static DHCP reservation", "name", in.Name, "ip", in.IP, "mac", in.MAC, "server", in.Server)
 		input := sdsclient.DhcpStaticAddInput{
 			ServerName:    &in.Server,
@@ -223,6 +236,13 @@ func dhcpStaticAddHandler(client *services.APIClientWrapper, logger *slog.Logger
 
 func dhcpStaticDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpStaticDeleteInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpStaticDeleteInput) (*mcp.CallToolResult, any, error) {
+		if err := ValidateRequiredString(in.Server, "server"); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateIP(in.IP, "ip"); err != nil {
+			return validationErrorResult(err)
+		}
+
 		logger.Info("deleting static DHCP reservation", "ip", in.IP, "server", in.Server)
 		authCtx := client.AuthContext(ctx)
 		req := client.DhcpAPI.DhcpStaticDelete(authCtx).

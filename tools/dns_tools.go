@@ -92,6 +92,24 @@ func RegisterDNSTools(s *mcp.Server, client *services.APIClientWrapper, logger *
 
 func dnsRecordCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSRecordCreateInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordCreateInput) (*mcp.CallToolResult, any, error) {
+		if err := ValidateRequiredString(in.Zone, "zone"); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateRequiredString(in.Name, "name"); err != nil {
+			return validationErrorResult(err)
+		}
+		rrType, err := ValidateDNSRecordType(in.Type)
+		if err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateDNSRecordValue(rrType, in.Value); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateTTL(in.TTL); err != nil {
+			return validationErrorResult(err)
+		}
+		in.Type = rrType
+
 		logger.Info("creating DNS record", "name", in.Name, "zone", in.Zone, "type", in.Type, "value", in.Value)
 		input := sdsclient.DnsRrAddInput{
 			ZoneName: &in.Zone,
@@ -124,6 +142,18 @@ func dnsRecordCreateHandler(client *services.APIClientWrapper, logger *slog.Logg
 
 func dnsRecordDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSRecordDeleteInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordDeleteInput) (*mcp.CallToolResult, any, error) {
+		if err := ValidateRequiredString(in.Zone, "zone"); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateRequiredString(in.Name, "name"); err != nil {
+			return validationErrorResult(err)
+		}
+		rrType, err := ValidateDNSRecordType(in.Type)
+		if err != nil {
+			return validationErrorResult(err)
+		}
+		in.Type = rrType
+
 		logger.Info("deleting DNS record", "name", in.Name, "zone", in.Zone, "type", in.Type)
 		authCtx := client.AuthContext(ctx)
 		req := client.DnsAPI.DnsRrDelete(authCtx).

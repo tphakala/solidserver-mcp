@@ -311,6 +311,173 @@ func TestIPCreateNoFreeAddress(t *testing.T) {
 	}
 }
 
+// TestHandlerInputValidationRejectsInvalidParameters checks that malformed inputs
+// are rejected on the client side without contacting the remote appliance.
+func TestHandlerInputValidationRejectsInvalidParameters(t *testing.T) {
+	l := testLogger()
+	client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[]}`)
+
+	cases := []struct {
+		name    string
+		invoke  func() (*mcp.CallToolResult, any, error)
+		wantMsg string
+	}{
+		{
+			name: "ip_create invalid subnet",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				return ipCreateHandler(client, l)(t.Context(), nil, IPCreateInput{Space: testSpace, Subnet: "999.999.999.999"})
+			},
+			wantMsg: "is not a valid IP address",
+		},
+		{
+			name: "ip_create invalid hostaddr",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				return ipCreateHandler(client, l)(t.Context(), nil, IPCreateInput{Space: testSpace, Subnet: testSubnet, Hostaddr: "invalid-ip"})
+			},
+			wantMsg: "is not a valid IP address",
+		},
+		{
+			name: "ip_create invalid mac",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				return ipCreateHandler(client, l)(t.Context(), nil, IPCreateInput{Space: testSpace, Subnet: testSubnet, Hostaddr: "192.0.2.10", Mac: "bad-mac"})
+			},
+			wantMsg: "is not a valid MAC address",
+		},
+		{
+			name: "ip_delete invalid ip",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				return ipDeleteHandler(client, l)(t.Context(), nil, IPDeleteInput{Space: testSpace, IPAddress: "not-an-ip"})
+			},
+			wantMsg: "is not a valid IP address",
+		},
+		{
+			name: "subnet_create invalid prefix",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				return subnetCreateHandler(client, l)(t.Context(), nil, SubnetCreateInput{Space: testSpace, Address: testSubnet, Prefix: "45", Name: "test"})
+			},
+			wantMsg: "prefix 45 is invalid for IPv4",
+		},
+		{
+			name: "subnet_info non-positive id",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				return subnetInfoHandler(client, l)(t.Context(), nil, SubnetInfoInput{ID: 0})
+			},
+			wantMsg: "must be a positive integer",
+		},
+		{
+			name: "vlan_create invalid vlan id",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				return vlanCreateHandler(client, l)(t.Context(), nil, VlanCreateInput{Domain: testVlanDom, VlanID: 5000, Name: "guest"})
+			},
+			wantMsg: "vlan_id must be between 1 and 4094",
+		},
+		{
+			name: "dns_record_create invalid type",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				return dnsRecordCreateHandler(client, l)(t.Context(), nil, DNSRecordCreateInput{Zone: "example.com", Name: "host", Type: "INVALID_TYPE", Value: "192.0.2.1"})
+			},
+			wantMsg: "unsupported DNS record type",
+		},
+		{
+			name: "dns_record_create A record with IPv6 value",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				return dnsRecordCreateHandler(client, l)(t.Context(), nil, DNSRecordCreateInput{Zone: "example.com", Name: "host", Type: "A", Value: "2001:db8::1"})
+			},
+			wantMsg: "is not a valid IPv4 address",
+		},
+		{
+			name: "dhcp_static_add invalid mac",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				return dhcpStaticAddHandler(client, l)(t.Context(), nil, DhcpStaticAddInput{Server: "srv1", Name: "printer", IP: "192.0.2.50", MAC: "invalid-mac"})
+			},
+			wantMsg: "is not a valid DHCP MAC address",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			beforeCount := fake.count()
+			res, _, err := tc.invoke()
+			if err != nil {
+				t.Fatalf("unexpected transport error: %v", err)
+			}
+			if res == nil || !res.IsError {
+				t.Fatalf("expected error result, got %v", res)
+			}
+			if !strings.Contains(resultText(res), tc.wantMsg) {
+				t.Errorf("error text %q does not contain expected substring %q", resultText(res), tc.wantMsg)
+			}
+			if fake.count() != beforeCount {
+				t.Errorf("handler contacted the appliance for invalid input; requests before=%d, after=%d", beforeCount, fake.count())
+			}
+		})
+	}
+}
+
+// TestWHEREClauseSanitizationAndEscaping checks that quotes in identifiers are properly
+// escaped when interpolated into WHERE clauses.
+func TestWHEREClauseSanitizationAndEscaping(t *testing.T) {
+	l := testLogger()
+	client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[]}`)
+
+	t.Run("ip_find_free escapes quote in space and subnet", func(t *testing.T) {
+		_, _, _ = ipFindFreeHandler(client, l)(t.Context(), nil, IPFindFreeInput{
+			Space:  "corp's space",
+			Subnet: testSubnet,
+		})
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		if len(fake.requests) == 0 {
+			t.Fatal("expected request to fake appliance")
+		}
+		lastReq := fake.requests[len(fake.requests)-1]
+		whereQuery := lastReq.query.Get("where")
+		if !strings.Contains(whereQuery, `space_name='corp\'s space'`) {
+			t.Errorf("WHERE query %q does not contain properly escaped space_name", whereQuery)
+		}
+	})
+
+	t.Run("vlan_list escapes quote in domain name", func(t *testing.T) {
+		_, _, _ = vlanListHandler(client, l)(t.Context(), nil, VlanListInput{
+			Domain: "dom'ain",
+		})
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		if len(fake.requests) == 0 {
+			t.Fatal("expected request to fake appliance")
+		}
+		lastReq := fake.requests[len(fake.requests)-1]
+		whereQuery := lastReq.query.Get("where")
+		if !strings.Contains(whereQuery, `domain_name='dom\'ain'`) {
+			t.Errorf("WHERE query %q does not contain properly escaped domain_name", whereQuery)
+		}
+	})
+}
+
+// TestUnbalancedWHEREClauseRejected checks that WHERE clauses with unclosed quotes
+// are rejected on the client side.
+func TestUnbalancedWHEREClauseRejected(t *testing.T) {
+	l := testLogger()
+	client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[]}`)
+
+	res, _, err := ipListHandler(client, l)(t.Context(), nil, IPListInput{
+		Space: testSpace,
+		Where: "address_name = 'unterminated",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res == nil || !res.IsError {
+		t.Fatalf("expected error result for unbalanced quote, got %v", res)
+	}
+	if !strings.Contains(resultText(res), "unclosed single quote") {
+		t.Errorf("expected unclosed quote error message, got %s", resultText(res))
+	}
+	if fake.count() != 0 {
+		t.Errorf("handler contacted appliance despite invalid where clause")
+	}
+}
+
 // resultText flattens a tool result's content for assertions.
 func resultText(res *mcp.CallToolResult) string {
 	var b strings.Builder

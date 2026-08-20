@@ -67,6 +67,9 @@ linters:
       - path: 'tools/.*_tools\.go'
         linters:
           - bodyclose
+      - path: '.*_test\.go'
+        linters:
+          - goconst
   settings:
     dupl:
       threshold: 120

@@ -101,6 +101,12 @@ func errorResult(format string, args ...any) (res *mcp.CallToolResult, anyVal an
 	}, nil
 }
 
+// validationErrorResult builds a tool error result for validation failures.
+func validationErrorResult(err error) (*mcp.CallToolResult, any, error) {
+	res, anyVal := errorResult("invalid parameter: %v", err)
+	return res, anyVal, nil
+}
+
 // ListOptions defines common parameters for list tools.
 type ListOptions struct {
 	Where  string `json:"where,omitempty"`
@@ -119,6 +125,17 @@ func commonListHandler(
 	toolName string,
 	execute CommonListRequester,
 ) (*mcp.CallToolResult, any, error) {
+	if err := ValidateWhereClause(opts.Where); err != nil {
+		logger.Error("invalid where clause", "tool", toolName, "error", err)
+		res, anyVal := errorResult("invalid where clause: %v", err)
+		return res, anyVal, nil
+	}
+
+	if opts.Offset < 0 {
+		res, anyVal := errorResult("offset must be non-negative, got %d", opts.Offset)
+		return res, anyVal, nil
+	}
+
 	limit := opts.Limit
 	if limit <= 0 {
 		limit = 50
