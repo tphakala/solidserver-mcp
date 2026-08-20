@@ -18,6 +18,11 @@ import (
 // states its hints explicitly. All of these tools reach an external SolidServer
 // appliance, so OpenWorldHint is true throughout.
 
+const (
+	defaultListLimit = 50
+	maxListLimit     = 1000
+)
+
 // readOnlyTool annotates a tool that only reads state.
 func readOnlyTool(title string) *mcp.ToolAnnotations {
 	return &mcp.ToolAnnotations{
@@ -50,16 +55,22 @@ func destructiveTool(title string) *mcp.ToolAnnotations {
 	}
 }
 
-// RegisterAll registers all SolidServer tools with the MCP server.
+// RegisterAll registers all SolidServer tools with default guardrails.
 func RegisterAll(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
+	RegisterAllWithGuardrails(s, client, logger, nil)
+}
+
+// RegisterAllWithGuardrails registers all SolidServer tools with the MCP server and applies guardrails.
+func RegisterAllWithGuardrails(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	RegisterIPAMTools(s, client, logger)
-	RegisterSubnetTools(s, client, logger)
-	RegisterDNSTools(s, client, logger)
-	RegisterVlanTools(s, client, logger)
-	RegisterDhcpTools(s, client, logger)
+	RegisterIPAMTools(s, client, logger, g)
+	RegisterSubnetTools(s, client, logger, g)
+	RegisterDNSTools(s, client, logger, g)
+	RegisterVlanTools(s, client, logger, g)
+	RegisterDhcpTools(s, client, logger, g)
+	RegisterDoctorTool(s, client, logger)
 }
 
 // jsonResult builds a JSON-formatted text content result from structured output data.
@@ -221,7 +232,9 @@ func commonListHandler[T any](
 
 	limit := opts.Limit
 	if limit <= 0 {
-		limit = 50
+		limit = defaultListLimit
+	} else if limit > maxListLimit {
+		limit = maxListLimit
 	}
 
 	logger.Debug("executing list tool", "tool", toolName, "where", opts.Where, "limit", limit, "offset", opts.Offset)

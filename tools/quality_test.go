@@ -58,6 +58,7 @@ var expectedTools = map[string]toolClass{
 	"solidserver_dhcp_lease_list":  classRead,
 	"solidserver_ip_find_free":     classRead,
 	"solidserver_ip_list":          classRead,
+	"solidserver_doctor":           classRead,
 	// additive
 	"solidserver_vlan_create":       classAdditive,
 	"solidserver_dns_record_create": classAdditive,

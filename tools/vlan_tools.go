@@ -49,7 +49,7 @@ type VlanDeleteOut struct {
 }
 
 // RegisterVlanTools registers VLAN management tools.
-func RegisterVlanTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
+func RegisterVlanTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_vlan_domain_list",
 		Title:       "List VLAN domains",
@@ -83,7 +83,7 @@ func RegisterVlanTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 			"solidserver_vlan_list first, because re-running this with an ID that is already in use " +
 			"fails rather than updating the existing VLAN. Changes appliance state and is undone " +
 			"only by solidserver_vlan_delete. Returns the created VLAN record as JSON.",
-	}, vlanCreateHandler(client, logger))
+	}, vlanCreateHandler(client, logger, g))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_vlan_delete",
@@ -94,7 +94,7 @@ func RegisterVlanTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 			"recreated with solidserver_vlan_create, which will not restore anything that referenced " +
 			"it. Confirm the exact name with solidserver_vlan_list first, since deleting the wrong " +
 			"VLAN can black-hole traffic on the segment. Returns a confirmation message.",
-	}, vlanDeleteHandler(client, logger))
+	}, vlanDeleteHandler(client, logger, g))
 }
 
 func vlanDomainListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanDomainListInput) (*mcp.CallToolResult, VlanDomainListOut, error) {
@@ -151,9 +151,13 @@ func vlanListHandler(client *services.APIClientWrapper, logger *slog.Logger) fun
 	}
 }
 
-func vlanCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanCreateInput) (*mcp.CallToolResult, VlanCreateOut, error) {
+func vlanCreateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, VlanCreateInput) (*mcp.CallToolResult, VlanCreateOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanCreateInput) (*mcp.CallToolResult, VlanCreateOut, error) {
 		emptyOut := VlanCreateOut{Data: make([]sdsclient.DataInnerVlanVlanAddSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
 
 		if err := ValidateRequiredString(in.Domain, "domain"); err != nil {
 			return validationErrorResult(err, emptyOut)
@@ -192,9 +196,13 @@ func vlanCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 	}
 }
 
-func vlanDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanDeleteInput) (*mcp.CallToolResult, VlanDeleteOut, error) {
+func vlanDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, VlanDeleteInput) (*mcp.CallToolResult, VlanDeleteOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanDeleteInput) (*mcp.CallToolResult, VlanDeleteOut, error) {
 		emptyOut := VlanDeleteOut{Data: make([]sdsclient.DataInnerVlanVlanDeleteSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
 
 		if err := ValidateRequiredString(in.Domain, "domain"); err != nil {
 			return validationErrorResult(err, emptyOut)

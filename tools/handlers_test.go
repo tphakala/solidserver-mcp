@@ -130,19 +130,19 @@ func handlerCases() []handlerCase {
 			return res, out, err
 		}},
 		{"vlan_create", "/api/v2.0/vlan/vlan/add", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
-			res, out, err := vlanCreateHandler(c, l)(ctx, nil, VlanCreateInput{Domain: testVlanDom, VlanID: 10, Name: "guest"})
+			res, out, err := vlanCreateHandler(c, l, nil)(ctx, nil, VlanCreateInput{Domain: testVlanDom, VlanID: 10, Name: "guest"})
 			return res, out, err
 		}},
 		{"vlan_delete", "/api/v2.0/vlan/vlan/delete", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
-			res, out, err := vlanDeleteHandler(c, l)(ctx, nil, VlanDeleteInput{Domain: testVlanDom, Name: "guest"})
+			res, out, err := vlanDeleteHandler(c, l, nil)(ctx, nil, VlanDeleteInput{Domain: testVlanDom, Name: "guest"})
 			return res, out, err
 		}},
 		{"dns_record_create", "/api/v2.0/dns/rr/add", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
-			res, out, err := dnsRecordCreateHandler(c, l)(ctx, nil, DNSRecordCreateInput{Zone: "example.com", Name: testRecord, Type: "A", Value: "192.0.2.10"})
+			res, out, err := dnsRecordCreateHandler(c, l, nil)(ctx, nil, DNSRecordCreateInput{Zone: "example.com", Name: testRecord, Type: "A", Value: "192.0.2.10"})
 			return res, out, err
 		}},
 		{"dns_record_delete", "/api/v2.0/dns/rr/delete", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
-			res, out, err := dnsRecordDeleteHandler(c, l)(ctx, nil, DNSRecordDeleteInput{Zone: "example.com", Name: testRecord, Type: "A"})
+			res, out, err := dnsRecordDeleteHandler(c, l, nil)(ctx, nil, DNSRecordDeleteInput{Zone: "example.com", Name: testRecord, Type: "A"})
 			return res, out, err
 		}},
 		{"dns_record_list", "/api/v2.0/dns/rr/list", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
@@ -162,11 +162,11 @@ func handlerCases() []handlerCase {
 			return res, out, err
 		}},
 		{"subnet_create", "/api/v2.0/ipam/network/add", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
-			res, out, err := subnetCreateHandler(c, l)(ctx, nil, SubnetCreateInput{Space: testSpace, Address: testSubnet, Prefix: "24", Name: "lan"})
+			res, out, err := subnetCreateHandler(c, l, nil)(ctx, nil, SubnetCreateInput{Space: testSpace, Address: testSubnet, Prefix: "24", Name: "lan"})
 			return res, out, err
 		}},
 		{"subnet_delete", "/api/v2.0/ipam/network/delete", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
-			res, out, err := subnetDeleteHandler(c, l)(ctx, nil, SubnetDeleteInput{Space: testSpace, Address: testSubnet})
+			res, out, err := subnetDeleteHandler(c, l, nil)(ctx, nil, SubnetDeleteInput{Space: testSpace, Address: testSubnet})
 			return res, out, err
 		}},
 		{"space_list", "/api/v2.0/ipam/space/list", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
@@ -174,7 +174,7 @@ func handlerCases() []handlerCase {
 			return res, out, err
 		}},
 		{"ip_delete", "/api/v2.0/ipam/address/delete", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
-			res, out, err := ipDeleteHandler(c, l)(ctx, nil, IPDeleteInput{IPAddress: "192.0.2.10", Space: testSpace})
+			res, out, err := ipDeleteHandler(c, l, nil)(ctx, nil, IPDeleteInput{IPAddress: "192.0.2.10", Space: testSpace})
 			return res, out, err
 		}},
 		{"ip_find_free", pathAddrList, func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
@@ -202,11 +202,11 @@ func handlerCases() []handlerCase {
 			return res, out, err
 		}},
 		{"dhcp_static_add", "/api/v2.0/dhcp/static/add", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
-			res, out, err := dhcpStaticAddHandler(c, l)(ctx, nil, DhcpStaticAddInput{Server: "dhcp1", Name: "printer", IP: "192.0.2.50", MAC: "01:00:11:22:33:44:55"})
+			res, out, err := dhcpStaticAddHandler(c, l, nil)(ctx, nil, DhcpStaticAddInput{Server: "dhcp1", Name: "printer", IP: "192.0.2.50", MAC: "01:00:11:22:33:44:55"})
 			return res, out, err
 		}},
 		{"dhcp_static_delete", "/api/v2.0/dhcp/static/delete", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
-			res, out, err := dhcpStaticDeleteHandler(c, l)(ctx, nil, DhcpStaticDeleteInput{Server: "dhcp1", IP: "192.0.2.50"})
+			res, out, err := dhcpStaticDeleteHandler(c, l, nil)(ctx, nil, DhcpStaticDeleteInput{Server: "dhcp1", IP: "192.0.2.50"})
 			return res, out, err
 		}},
 	}
@@ -270,7 +270,7 @@ func TestHandlersReportAPIErrors(t *testing.T) {
 func TestIPCreateFindsFreeAddress(t *testing.T) {
 	client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[{"address_hostaddr":"192.0.2.25"}]}`)
 
-	res, _, err := ipCreateHandler(client, testLogger())(t.Context(), nil,
+	res, _, err := ipCreateHandler(client, testLogger(), nil)(t.Context(), nil,
 		IPCreateInput{Space: testSpace, Subnet: testSubnet})
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
@@ -295,7 +295,7 @@ func TestIPCreateFindsFreeAddress(t *testing.T) {
 func TestIPCreateWithExplicitAddressSkipsLookup(t *testing.T) {
 	client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[{"id":"1"}]}`)
 
-	res, _, err := ipCreateHandler(client, testLogger())(t.Context(), nil,
+	res, _, err := ipCreateHandler(client, testLogger(), nil)(t.Context(), nil,
 		IPCreateInput{Space: testSpace, Subnet: testSubnet, Hostaddr: "192.0.2.99", Name: testRecord, Mac: "00:11:22:33:44:55"})
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
@@ -317,7 +317,7 @@ func TestIPCreateWithExplicitAddressSkipsLookup(t *testing.T) {
 func TestIPCreateNoFreeAddress(t *testing.T) {
 	client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[]}`)
 
-	res, _, err := ipCreateHandler(client, testLogger())(t.Context(), nil,
+	res, _, err := ipCreateHandler(client, testLogger(), nil)(t.Context(), nil,
 		IPCreateInput{Space: testSpace, Subnet: testSubnet})
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
@@ -333,9 +333,10 @@ func TestIPCreateNoFreeAddress(t *testing.T) {
 	}
 }
 
-// TestHandlerInputValidationRejectsInvalidParameters checks that malformed inputs
-// are rejected on the client side without contacting the remote appliance.
-func TestHandlerInputValidationRejectsInvalidParameters(t *testing.T) {
+// TestHandlerInputValidationRejectsLocally confirms every handler's client-side
+// validation fires before making an HTTP request. The fake appliance returns
+// HTTP 200 with an empty body; if a request is made, the test fails on the count.
+func TestHandlerInputValidationRejectsLocally(t *testing.T) {
 	l := testLogger()
 	client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[]}`)
 
@@ -347,7 +348,7 @@ func TestHandlerInputValidationRejectsInvalidParameters(t *testing.T) {
 		{
 			name: "ip_create invalid subnet",
 			invoke: func() (*mcp.CallToolResult, any, error) {
-				res, out, err := ipCreateHandler(client, l)(t.Context(), nil, IPCreateInput{Space: testSpace, Subnet: "999.999.999.999"})
+				res, out, err := ipCreateHandler(client, l, nil)(t.Context(), nil, IPCreateInput{Space: testSpace, Subnet: "999.999.999.999"})
 				return res, out, err
 			},
 			wantMsg: "is not a valid IP address",
@@ -355,7 +356,7 @@ func TestHandlerInputValidationRejectsInvalidParameters(t *testing.T) {
 		{
 			name: "ip_create invalid hostaddr",
 			invoke: func() (*mcp.CallToolResult, any, error) {
-				res, out, err := ipCreateHandler(client, l)(t.Context(), nil, IPCreateInput{Space: testSpace, Subnet: testSubnet, Hostaddr: "invalid-ip"})
+				res, out, err := ipCreateHandler(client, l, nil)(t.Context(), nil, IPCreateInput{Space: testSpace, Subnet: testSubnet, Hostaddr: "invalid-ip"})
 				return res, out, err
 			},
 			wantMsg: "is not a valid IP address",
@@ -363,7 +364,7 @@ func TestHandlerInputValidationRejectsInvalidParameters(t *testing.T) {
 		{
 			name: "ip_create invalid mac",
 			invoke: func() (*mcp.CallToolResult, any, error) {
-				res, out, err := ipCreateHandler(client, l)(t.Context(), nil, IPCreateInput{Space: testSpace, Subnet: testSubnet, Hostaddr: "192.0.2.10", Mac: "bad-mac"})
+				res, out, err := ipCreateHandler(client, l, nil)(t.Context(), nil, IPCreateInput{Space: testSpace, Subnet: testSubnet, Hostaddr: "192.0.2.10", Mac: "bad-mac"})
 				return res, out, err
 			},
 			wantMsg: "is not a valid MAC address",
@@ -371,7 +372,7 @@ func TestHandlerInputValidationRejectsInvalidParameters(t *testing.T) {
 		{
 			name: "ip_delete invalid ip",
 			invoke: func() (*mcp.CallToolResult, any, error) {
-				res, out, err := ipDeleteHandler(client, l)(t.Context(), nil, IPDeleteInput{Space: testSpace, IPAddress: "not-an-ip"})
+				res, out, err := ipDeleteHandler(client, l, nil)(t.Context(), nil, IPDeleteInput{Space: testSpace, IPAddress: "not-an-ip"})
 				return res, out, err
 			},
 			wantMsg: "is not a valid IP address",
@@ -379,7 +380,7 @@ func TestHandlerInputValidationRejectsInvalidParameters(t *testing.T) {
 		{
 			name: "subnet_create invalid prefix",
 			invoke: func() (*mcp.CallToolResult, any, error) {
-				res, out, err := subnetCreateHandler(client, l)(t.Context(), nil, SubnetCreateInput{Space: testSpace, Address: testSubnet, Prefix: "45", Name: "test"})
+				res, out, err := subnetCreateHandler(client, l, nil)(t.Context(), nil, SubnetCreateInput{Space: testSpace, Address: testSubnet, Prefix: "45", Name: "test"})
 				return res, out, err
 			},
 			wantMsg: "prefix 45 is invalid for IPv4",
@@ -395,7 +396,7 @@ func TestHandlerInputValidationRejectsInvalidParameters(t *testing.T) {
 		{
 			name: "vlan_create invalid vlan id",
 			invoke: func() (*mcp.CallToolResult, any, error) {
-				res, out, err := vlanCreateHandler(client, l)(t.Context(), nil, VlanCreateInput{Domain: testVlanDom, VlanID: 5000, Name: "guest"})
+				res, out, err := vlanCreateHandler(client, l, nil)(t.Context(), nil, VlanCreateInput{Domain: testVlanDom, VlanID: 5000, Name: "guest"})
 				return res, out, err
 			},
 			wantMsg: "vlan_id must be between 1 and 4094",
@@ -403,7 +404,7 @@ func TestHandlerInputValidationRejectsInvalidParameters(t *testing.T) {
 		{
 			name: "dns_record_create invalid type",
 			invoke: func() (*mcp.CallToolResult, any, error) {
-				res, out, err := dnsRecordCreateHandler(client, l)(t.Context(), nil, DNSRecordCreateInput{Zone: "example.com", Name: "host", Type: "INVALID_TYPE", Value: "192.0.2.1"})
+				res, out, err := dnsRecordCreateHandler(client, l, nil)(t.Context(), nil, DNSRecordCreateInput{Zone: "example.com", Name: "host", Type: "INVALID_TYPE", Value: "192.0.2.1"})
 				return res, out, err
 			},
 			wantMsg: "unsupported DNS record type",
@@ -411,7 +412,7 @@ func TestHandlerInputValidationRejectsInvalidParameters(t *testing.T) {
 		{
 			name: "dns_record_create A record with IPv6 value",
 			invoke: func() (*mcp.CallToolResult, any, error) {
-				res, out, err := dnsRecordCreateHandler(client, l)(t.Context(), nil, DNSRecordCreateInput{Zone: "example.com", Name: "host", Type: "A", Value: "2001:db8::1"})
+				res, out, err := dnsRecordCreateHandler(client, l, nil)(t.Context(), nil, DNSRecordCreateInput{Zone: "example.com", Name: "host", Type: "A", Value: "2001:db8::1"})
 				return res, out, err
 			},
 			wantMsg: "is not a valid IPv4 address",
@@ -419,7 +420,7 @@ func TestHandlerInputValidationRejectsInvalidParameters(t *testing.T) {
 		{
 			name: "dhcp_static_add invalid mac",
 			invoke: func() (*mcp.CallToolResult, any, error) {
-				res, out, err := dhcpStaticAddHandler(client, l)(t.Context(), nil, DhcpStaticAddInput{Server: "srv1", Name: "printer", IP: "192.0.2.50", MAC: "invalid-mac"})
+				res, out, err := dhcpStaticAddHandler(client, l, nil)(t.Context(), nil, DhcpStaticAddInput{Server: "srv1", Name: "printer", IP: "192.0.2.50", MAC: "invalid-mac"})
 				return res, out, err
 			},
 			wantMsg: "is not a valid DHCP MAC address",
@@ -443,7 +444,7 @@ func TestHandlerInputValidationRejectsInvalidParameters(t *testing.T) {
 		{
 			name: "dns_record_create null byte in zone rejected",
 			invoke: func() (*mcp.CallToolResult, any, error) {
-				res, out, err := dnsRecordCreateHandler(client, l)(t.Context(), nil, DNSRecordCreateInput{Zone: "example\x00.com", Name: "host", Type: "A", Value: "192.0.2.1"})
+				res, out, err := dnsRecordCreateHandler(client, l, nil)(t.Context(), nil, DNSRecordCreateInput{Zone: "example\x00.com", Name: "host", Type: "A", Value: "192.0.2.1"})
 				return res, out, err
 			},
 			wantMsg: "cannot contain null bytes",

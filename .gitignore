@@ -19,6 +19,9 @@ dist/
 # OS
 .DS_Store
 
+# Task
+.task/
+
 # Plans, specs and design docs are never committed
 *-plan.md
 *-spec.md
