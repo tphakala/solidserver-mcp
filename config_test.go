@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -26,6 +27,8 @@ func TestLoadConfig_Valid(t *testing.T) {
 	t.Setenv(envMaxRetries, "5")
 	t.Setenv(envRateLimit, "25.5")
 	t.Setenv(envLogRedactPII, "true")
+	t.Setenv(envTokenIDFile, "")
+	t.Setenv(envTokenSecretFile, "")
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -109,6 +112,8 @@ func TestLoadConfig_Defaults(t *testing.T) {
 	t.Setenv(envMaxRetries, "")
 	t.Setenv(envRateLimit, "")
 	t.Setenv(envLogRedactPII, "")
+	t.Setenv(envTokenIDFile, "")
+	t.Setenv(envTokenSecretFile, "")
 
 	cfg, err := LoadConfig()
 	if err != nil {
@@ -203,6 +208,9 @@ func TestLoadConfig_FileSecretErrors(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error for nonexistent file, got nil")
 		}
+		if !strings.Contains(err.Error(), "reading SOLIDSERVER_TOKEN_ID_FILE") {
+			t.Errorf("unexpected error message: %v", err)
+		}
 	})
 
 	t.Run("empty file", func(t *testing.T) {
@@ -213,6 +221,9 @@ func TestLoadConfig_FileSecretErrors(t *testing.T) {
 		_, err := LoadConfig()
 		if err == nil {
 			t.Fatal("expected error for empty file, got nil")
+		}
+		if !strings.Contains(err.Error(), "is empty") {
+			t.Errorf("unexpected error message: %v", err)
 		}
 	})
 }
@@ -249,6 +260,7 @@ func TestLoadConfig_InvalidValues(t *testing.T) {
 				envTransport, envLogLevel, envHTTPHost, envSSLVerify, envHTTPPort,
 				envReadOnly, envProtectedSpaces, envProtectedZones, envProtectedSubnets,
 				envHTTPTimeout, envMaxRetries, envRateLimit, envLogRedactPII,
+				envTokenIDFile, envTokenSecretFile,
 			} {
 				t.Setenv(optional, "")
 			}
@@ -283,6 +295,8 @@ func TestLoadConfig_MissingRequired(t *testing.T) {
 			t.Setenv(envHost, tt.host)
 			t.Setenv(envTokenID, tt.tokenID)
 			t.Setenv(envTokenSecret, tt.tokenSecret)
+			t.Setenv(envTokenIDFile, "")
+			t.Setenv(envTokenSecretFile, "")
 
 			_, err := LoadConfig()
 			if err == nil {

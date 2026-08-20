@@ -228,6 +228,9 @@ func dhcpStaticAddHandler(client *services.APIClientWrapper, logger *slog.Logger
 		if err := g.CheckReadOnly(); err != nil {
 			return errorResult("%v", err), emptyOut, nil
 		}
+		if err := g.CheckProtectedSubnet(in.IP); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
 
 		if err := ValidateRequiredString(in.Server, "server"); err != nil {
 			return validationErrorResult(err, emptyOut)
@@ -275,6 +278,9 @@ func dhcpStaticDeleteHandler(client *services.APIClientWrapper, logger *slog.Log
 		emptyOut := DhcpStaticDeleteOut{Data: make([]sdsclient.DataInnerDhcpStaticDeleteSuccess, 0)}
 
 		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := g.CheckProtectedSubnet(in.IP); err != nil {
 			return errorResult("%v", err), emptyOut, nil
 		}
 

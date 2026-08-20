@@ -57,7 +57,7 @@ func TestRunDoctorCLI(t *testing.T) {
 
 func TestRunDoctorCLI_Failure(t *testing.T) {
 	cfg := &Config{
-		Host:        "invalid.host.nonexistent.local",
+		Host:        "127.0.0.1:1",
 		TokenID:     "id",
 		TokenSecret: "secret",
 		SSLVerify:   false,
@@ -65,6 +65,9 @@ func TestRunDoctorCLI_Failure(t *testing.T) {
 
 	err := runDoctorCLI(t.Context(), cfg)
 	if err == nil {
-		t.Error("expected runDoctorCLI to return error on failed preflight, got nil")
+		t.Fatal("expected runDoctorCLI to return error on failed preflight, got nil")
+	}
+	if err.Error() != "preflight doctor checks failed" {
+		t.Errorf("expected %q, got %q", "preflight doctor checks failed", err.Error())
 	}
 }

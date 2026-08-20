@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/time/rate"
@@ -19,6 +21,8 @@ const (
 	defaultInitialBackoff = 200 * time.Millisecond
 	defaultMaxBackoff     = 10 * time.Second
 	maxRequestBodyBytes   = 10 * 1024 * 1024 // 10 MB
+	maxBackoffShift       = 10
+	jitterDivisor         = 4
 )
 
 // RetryTransport wraps an http.RoundTripper with rate limiting, timeouts, and bounded retries with backoff.
@@ -49,10 +53,15 @@ func isRetryableNetworkError(err error) bool {
 	if netErr, ok := errors.AsType[net.Error](err); ok && netErr.Timeout() {
 		return true
 	}
-	errStr := strings.ToLower(err.Error())
-	return errors.Is(err, io.EOF) ||
+	if errors.Is(err, io.EOF) ||
 		errors.Is(err, io.ErrUnexpectedEOF) ||
-		strings.Contains(errStr, "connection reset") ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.EPIPE) {
+		return true
+	}
+	errStr := strings.ToLower(err.Error())
+	return strings.Contains(errStr, "connection reset") ||
 		strings.Contains(errStr, "connection refused") ||
 		strings.Contains(errStr, "broken pipe") ||
 		strings.Contains(errStr, "temporary failure")
@@ -76,37 +85,45 @@ func parseRetryAfter(header string) time.Duration {
 
 func calculateBackoff(attempt int, resp *http.Response, initialBackoff, maxBackoff time.Duration) time.Duration {
 	var backoff time.Duration
-	if resp != nil && resp.StatusCode == http.StatusTooManyRequests {
+	if resp != nil && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable) {
 		backoff = parseRetryAfter(resp.Header.Get("Retry-After"))
 	}
 	if backoff <= 0 {
-		multiplier := 1 << (attempt - 1)
+		shift := max(0, min(attempt-1, maxBackoffShift))
+		multiplier := 1 << shift
 		backoff = initialBackoff * time.Duration(multiplier)
-		jitter := time.Duration(rand.Int64N(int64(backoff/4 + 1)))
+		backoff = min(backoff, maxBackoff)
+		jitterBound := max(1, int64(backoff/jitterDivisor))
+		jitter := time.Duration(rand.Int64N(jitterBound))
 		backoff += jitter
 	}
-	if backoff > maxBackoff {
-		backoff = maxBackoff
-	}
-	return backoff
+	return min(backoff, maxBackoff)
 }
 
 func (t *RetryTransport) readBody(req *http.Request) ([]byte, error) {
-	if req.Body == nil {
+	if req.Body == nil || req.Body == http.NoBody {
 		return nil, nil
 	}
-	bodyBytes, err := io.ReadAll(io.LimitReader(req.Body, maxRequestBodyBytes))
+	var buf bytes.Buffer
+	n, err := io.Copy(&buf, io.LimitReader(req.Body, maxRequestBodyBytes+1))
 	_ = req.Body.Close()
 	if err != nil {
 		return nil, err
 	}
-	return bodyBytes, nil
+	if n > maxRequestBodyBytes {
+		return nil, fmt.Errorf("request body exceeds maximum allowed size of %d bytes", maxRequestBodyBytes)
+	}
+	return buf.Bytes(), nil
 }
 
 func cloneRequest(req *http.Request, bodyBytes []byte) *http.Request {
 	reqAttempt := req.Clone(req.Context())
 	if bodyBytes != nil {
 		reqAttempt.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		reqAttempt.ContentLength = int64(len(bodyBytes))
+		reqAttempt.GetBody = func() (io.ReadCloser, error) {
+			return io.NopCloser(bytes.NewReader(bodyBytes)), nil
+		}
 	}
 	return reqAttempt
 }
@@ -129,19 +146,18 @@ func waitRetry(ctx context.Context, attempt int, resp *http.Response, initialBac
 	}
 }
 
-// RoundTrip executes a single HTTP transaction with rate limiting and retry handling.
-func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if t.Limiter != nil {
-		if err := t.Limiter.Wait(req.Context()); err != nil {
-			return nil, err
-		}
-	}
+type retryOptions struct {
+	base           http.RoundTripper
+	initialBackoff time.Duration
+	maxBackoff     time.Duration
+	maxAttempts    int
+}
 
+func (t *RetryTransport) resolveOptions() retryOptions {
 	base := t.Base
 	if base == nil {
 		base = http.DefaultTransport
 	}
-
 	initialBackoff := t.InitialBackoff
 	if initialBackoff <= 0 {
 		initialBackoff = defaultInitialBackoff
@@ -150,30 +166,45 @@ func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if maxBackoff <= 0 {
 		maxBackoff = defaultMaxBackoff
 	}
+	return retryOptions{
+		base:           base,
+		initialBackoff: initialBackoff,
+		maxBackoff:     maxBackoff,
+		maxAttempts:    max(1, t.MaxRetries+1),
+	}
+}
 
+// RoundTrip executes a single HTTP transaction with rate limiting and retry handling.
+func (t *RetryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	opts := t.resolveOptions()
 	bodyBytes, err := t.readBody(req)
 	if err != nil {
 		return nil, err
 	}
 
-	maxAttempts := t.MaxRetries + 1
 	var lastErr error
 	var resp *http.Response
 
-	for attempt := range maxAttempts {
-		if err := waitRetry(req.Context(), attempt, resp, initialBackoff, maxBackoff); err != nil {
+	for attempt := range opts.maxAttempts {
+		if err := waitRetry(req.Context(), attempt, resp, opts.initialBackoff, opts.maxBackoff); err != nil {
 			return nil, err
 		}
 
-		resp, lastErr = base.RoundTrip(cloneRequest(req, bodyBytes))
+		if t.Limiter != nil {
+			if err := t.Limiter.Wait(req.Context()); err != nil {
+				return nil, err
+			}
+		}
+
+		resp, lastErr = opts.base.RoundTrip(cloneRequest(req, bodyBytes))
 		if lastErr != nil {
-			if !isRetryableNetworkError(lastErr) || attempt == maxAttempts-1 {
+			if !isRetryableNetworkError(lastErr) || attempt == opts.maxAttempts-1 {
 				return nil, lastErr
 			}
 			continue
 		}
 
-		if !isRetryableStatusCode(resp.StatusCode) || attempt == maxAttempts-1 {
+		if !isRetryableStatusCode(resp.StatusCode) || attempt == opts.maxAttempts-1 {
 			return resp, nil
 		}
 	}

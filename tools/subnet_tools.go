@@ -178,27 +178,39 @@ func subnetInfoHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 	}
 }
 
+func checkSubnetCreateGuardrails(g *Guardrails, in *SubnetCreateInput) error {
+	if err := g.CheckReadOnly(); err != nil {
+		return err
+	}
+	if err := g.CheckProtectedSpace(in.Space); err != nil {
+		return err
+	}
+	if in.Address != "" && in.Prefix != "" {
+		cidr := in.Address + "/" + in.Prefix
+		return g.CheckProtectedSubnet(cidr)
+	}
+	return g.CheckProtectedSubnet(in.Address)
+}
+
+func validateSubnetCreateInput(in *SubnetCreateInput) error {
+	if err := ValidateRequiredString(in.Space, "space"); err != nil {
+		return err
+	}
+	if err := ValidateRequiredString(in.Name, "name"); err != nil {
+		return err
+	}
+	return ValidateSubnetPrefix(in.Address, in.Prefix)
+}
+
 func subnetCreateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, SubnetCreateInput) (*mcp.CallToolResult, SubnetCreateOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetCreateInput) (*mcp.CallToolResult, SubnetCreateOut, error) {
 		emptyOut := SubnetCreateOut{Data: make([]sdsclient.DataInnerIpamNetworkAddSuccess, 0)}
 
-		if err := g.CheckReadOnly(); err != nil {
-			return errorResult("%v", err), emptyOut, nil
-		}
-		if err := g.CheckProtectedSpace(in.Space); err != nil {
-			return errorResult("%v", err), emptyOut, nil
-		}
-		if err := g.CheckProtectedSubnet(in.Address); err != nil {
+		if err := checkSubnetCreateGuardrails(g, &in); err != nil {
 			return errorResult("%v", err), emptyOut, nil
 		}
 
-		if err := ValidateRequiredString(in.Space, "space"); err != nil {
-			return validationErrorResult(err, emptyOut)
-		}
-		if err := ValidateRequiredString(in.Name, "name"); err != nil {
-			return validationErrorResult(err, emptyOut)
-		}
-		if err := ValidateSubnetPrefix(in.Address, in.Prefix); err != nil {
+		if err := validateSubnetCreateInput(&in); err != nil {
 			return validationErrorResult(err, emptyOut)
 		}
 

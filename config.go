@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -167,7 +168,7 @@ func parseResilience(cfg *Config) error {
 
 	if rateLimitStr := os.Getenv(envRateLimit); rateLimitStr != "" {
 		rl, err := strconv.ParseFloat(rateLimitStr, 64)
-		if err != nil || rl < 0 {
+		if err != nil || rl < 0 || math.IsNaN(rl) || math.IsInf(rl, 0) {
 			return fmt.Errorf("invalid %s %q: expected a non-negative number", envRateLimit, rateLimitStr)
 		}
 		cfg.RateLimit = rl

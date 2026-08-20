@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"regexp"
 	"syscall"
+	"time"
 
 	"github.com/tphakala/solidserver-mcp/services"
 )
@@ -21,7 +22,7 @@ var version = "dev"
 
 var (
 	ipRegex  = regexp.MustCompile(`\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b`)
-	macRegex = regexp.MustCompile(`\b[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5}\b`)
+	macRegex = regexp.MustCompile(`\b[0-9a-fA-F]{2}(:[0-9a-fA-F]{2}){5,6}\b`)
 )
 
 func redactPIIAttr(groups []string, a slog.Attr) slog.Attr {
@@ -46,13 +47,18 @@ func main() {
 	}
 }
 
+const doctorCLITimeout = 30 * time.Second
+
 func runDoctorCLI(ctx context.Context, cfg *Config) error {
 	client, err := newClientFromConfig(cfg)
 	if err != nil {
 		return fmt.Errorf("initializing client for doctor: %w", err)
 	}
 
-	result := services.RunDoctor(ctx, client, cfg.Host, cfg.SSLVerify)
+	doctorCtx, cancel := context.WithTimeout(ctx, doctorCLITimeout)
+	defer cancel()
+
+	result := services.RunDoctor(doctorCtx, client, cfg.Host, cfg.SSLVerify)
 	_, _ = fmt.Fprintf(os.Stdout, "SOLIDserver Preflight Doctor Report (%s):\n", cfg.Host)
 	for _, check := range result.Checks {
 		_, _ = fmt.Fprintf(os.Stdout, "  [%s] %s: %s\n", check.Status, check.Name, check.Message)

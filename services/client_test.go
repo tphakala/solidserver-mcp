@@ -2,8 +2,10 @@ package services
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -202,14 +204,15 @@ func TestRetryTransport_RateLimit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	limiter := rate.NewLimiter(rate.Limit(50), 5)
+	limiter := rate.NewLimiter(rate.Limit(50), 2)
 	rt := &RetryTransport{
 		Base:    http.DefaultTransport,
 		Limiter: limiter,
 	}
 	client := &http.Client{Transport: rt}
 
-	for i := range 5 {
+	start := time.Now()
+	for i := range 6 {
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, http.NoBody)
 		if err != nil {
 			t.Fatalf("request %d failed: %v", i, err)
@@ -220,14 +223,28 @@ func TestRetryTransport_RateLimit(t *testing.T) {
 		}
 		_ = resp.Body.Close()
 	}
+	elapsed := time.Since(start)
+	if elapsed < 50*time.Millisecond {
+		t.Errorf("expected rate limiting delay for 6 requests at 50/s with burst 2, took %v", elapsed)
+	}
 }
 
 func TestParseRetryAfter(t *testing.T) {
-	if d := parseRetryAfter(""); d != 0 {
-		t.Errorf("expected 0 for empty header, got %v", d)
+	cases := []struct {
+		header   string
+		expected time.Duration
+	}{
+		{"", 0},
+		{"-1", 0},
+		{"0", 0},
+		{"invalid", 0},
+		{"5", 5 * time.Second},
+		{"Fri, 31 Dec 1999 23:59:59 GMT", 0},
 	}
-	if d := parseRetryAfter("5"); d != 5*time.Second {
-		t.Errorf("expected 5s, got %v", d)
+	for _, tc := range cases {
+		if d := parseRetryAfter(tc.header); d != tc.expected {
+			t.Errorf("parseRetryAfter(%q) = %v, expected %v", tc.header, d, tc.expected)
+		}
 	}
 	futureTime := time.Now().Add(10 * time.Second).UTC().Format(http.TimeFormat)
 	if d := parseRetryAfter(futureTime); d <= 0 || d > 11*time.Second {
@@ -239,15 +256,22 @@ func TestDoctor_FailedHost(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
 
-	result := RunDoctor(ctx, nil, "nonexistent.invalid.local", true)
+	result := RunDoctor(ctx, nil, "127.0.0.1:1", true)
 	if result.Healthy {
 		t.Errorf("expected Healthy false for invalid host")
 	}
 	if len(result.Checks) == 0 {
 		t.Errorf("expected at least 1 check result")
 	}
-	if result.Checks[0].Status != StatusFail {
-		t.Errorf("expected first check to FAIL, got %s", result.Checks[0].Status)
+	var hasFail bool
+	for _, c := range result.Checks {
+		if c.Status == StatusFail {
+			hasFail = true
+			break
+		}
+	}
+	if !hasFail {
+		t.Errorf("expected at least one check with StatusFail")
 	}
 }
 
@@ -349,5 +373,50 @@ func TestRetryTransport_ExhaustsRetries(t *testing.T) {
 	}
 	if atomic.LoadInt32(&attempts) != 3 {
 		t.Errorf("expected 3 total attempts (1 initial + 2 retries), got %d", attempts)
+	}
+}
+
+func TestRetryTransport_RequestBodyReplay(t *testing.T) {
+	var attempts int32
+	var lastReceivedBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		att := atomic.AddInt32(&attempts, 1)
+		body, _ := io.ReadAll(r.Body)
+		lastReceivedBody = string(body)
+		if att == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	rt := &RetryTransport{
+		Base:           http.DefaultTransport,
+		MaxRetries:     2,
+		InitialBackoff: 5 * time.Millisecond,
+	}
+	client := &http.Client{Transport: rt}
+
+	payload := `{"key": "test_payload"}`
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL, strings.NewReader(payload))
+	if err != nil {
+		t.Fatalf("NewRequestWithContext: %v", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected status 200, got %d", resp.StatusCode)
+	}
+	if atomic.LoadInt32(&attempts) != 2 {
+		t.Errorf("expected 2 attempts, got %d", attempts)
+	}
+	if lastReceivedBody != payload {
+		t.Errorf("expected replayed body %q, got %q", payload, lastReceivedBody)
 	}
 }

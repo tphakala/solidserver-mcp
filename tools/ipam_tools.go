@@ -101,26 +101,31 @@ func RegisterIPAMTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 	}, ipListHandler(client, logger))
 }
 
-func checkIPCreateGuardrails(g *Guardrails, space, subnet string) error {
+func checkIPCreateGuardrails(g *Guardrails, space, subnet, hostaddr string) error {
 	if err := g.CheckReadOnly(); err != nil {
 		return err
 	}
 	if err := g.CheckProtectedSpace(space); err != nil {
 		return err
 	}
+	if hostaddr != "" {
+		if err := g.CheckProtectedSubnet(hostaddr); err != nil {
+			return err
+		}
+	}
 	return g.CheckProtectedSubnet(subnet)
 }
 
-func buildIPAddressAddInput(ctx context.Context, client *services.APIClientWrapper, in *IPCreateInput, logger *slog.Logger) (sdsclient.IpamAddressAddInput, *mcp.CallToolResult) {
+func buildIPAddressAddInput(ctx context.Context, client *services.APIClientWrapper, in *IPCreateInput, logger *slog.Logger) (sdsclient.IpamAddressAddInput, error) {
 	input := sdsclient.IpamAddressAddInput{
 		SpaceName: &in.Space,
 	}
 	if in.Hostaddr != "" {
 		input.AddressHostaddr = &in.Hostaddr
 	} else {
-		freeIP, res := findFirstFreeIP(ctx, client, in.Space, in.Subnet, logger)
-		if res != nil {
-			return input, res
+		freeIP, err := findFirstFreeIP(ctx, client, in.Space, in.Subnet, logger)
+		if err != nil {
+			return input, err
 		}
 		input.AddressHostaddr = freeIP
 	}
@@ -150,31 +155,32 @@ func validateIPCreateInput(in *IPCreateInput) error {
 			return err
 		}
 	}
-	if err := ValidateOptionalString(in.Name, "name"); err != nil {
-		return err
+	if in.Name != "" {
+		if err := ValidateOptionalString(in.Name, "name"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func findFirstFreeIP(ctx context.Context, client *services.APIClientWrapper, space, subnet string, logger *slog.Logger) (freeIP *string, res *mcp.CallToolResult) {
+func findFirstFreeIP(ctx context.Context, client *services.APIClientWrapper, space, subnet string, logger *slog.Logger) (*string, error) {
+	authCtx := client.AuthContext(ctx)
 	where := fmt.Sprintf("parent_subnet_addr='%s' AND is_free='1' AND space_name='%s'",
 		EscapeWhereValue(subnet), EscapeWhereValue(space))
 	logger.Debug("searching for free IP", "subnet", subnet, "space", space)
-	authCtx := client.AuthContext(ctx)
 	listReq := client.IpamAPI.IpamAddressList(authCtx).Where(where).Limit(1)
 	listResp, httpResp, apiErr := listReq.Execute()
 	closeBody(httpResp)
 	if apiErr != nil {
-		return nil, errorResult("failed to find free IP in subnet %s: %s", subnet, formatAPIError(apiErr, httpResp))
+		return nil, fmt.Errorf("finding free IP in subnet %s: %s", subnet, formatAPIError(apiErr, httpResp))
 	}
-
 	if listResp == nil || len(listResp.Data) == 0 {
-		return nil, errorResult("no free IP found in subnet: %s", subnet)
+		return nil, fmt.Errorf("no free IP found in subnet: %s", subnet)
 	}
 
 	firstFree := listResp.Data[0].AddressHostaddr
 	if firstFree == nil {
-		return nil, errorResult("found IP entry in subnet %s but it has no address", subnet)
+		return nil, fmt.Errorf("found IP entry in subnet %s but it has no address", subnet)
 	}
 	logger.Debug("found free IP", "ip", *firstFree)
 	return firstFree, nil
@@ -184,7 +190,7 @@ func ipCreateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPCreateInput) (*mcp.CallToolResult, IPCreateOut, error) {
 		emptyOut := IPCreateOut{Data: make([]sdsclient.DataInnerIpamAddressAddSuccess, 0)}
 
-		if err := checkIPCreateGuardrails(g, in.Space, in.Subnet); err != nil {
+		if err := checkIPCreateGuardrails(g, in.Space, in.Subnet, in.Hostaddr); err != nil {
 			return errorResult("%v", err), emptyOut, nil
 		}
 
@@ -192,9 +198,15 @@ func ipCreateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *
 			return validationErrorResult(err, emptyOut)
 		}
 
-		input, res := buildIPAddressAddInput(ctx, client, &in, logger)
-		if res != nil {
-			return res, emptyOut, nil
+		input, err := buildIPAddressAddInput(ctx, client, &in, logger)
+		if err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+
+		if input.AddressHostaddr != nil {
+			if err := g.CheckProtectedSubnet(*input.AddressHostaddr); err != nil {
+				return errorResult("%v", err), emptyOut, nil
+			}
 		}
 
 		logger.Info("creating IP address", "ip", *input.AddressHostaddr, "space", in.Space)
