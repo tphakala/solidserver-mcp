@@ -2,12 +2,15 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/efficientip-labs/solidserver-go-client/sdsclient"
 )
 
 func TestJsonResult(t *testing.T) {
@@ -42,15 +45,26 @@ func TestErrorResult(t *testing.T) {
 }
 
 func TestValidationErrorResult(t *testing.T) {
-	res, out, err := validationErrorResult[IPCreateOut](errors.New("bad input"))
+	emptyOut := IPCreateOut{Data: make([]sdsclient.DataInnerIpamAddressAddSuccess, 0)}
+	res, out, err := validationErrorResult(errors.New("bad input"), emptyOut)
 	if err != nil {
 		t.Fatalf("expected nil error, got %v", err)
 	}
 	if !res.IsError {
 		t.Error("expected IsError to be true")
 	}
+	if out.Data == nil {
+		t.Fatal("expected non-nil Data slice in out")
+	}
 	if len(out.Data) != 0 {
-		t.Errorf("expected empty data in zero value out, got %d", len(out.Data))
+		t.Errorf("expected empty data slice in out, got %d", len(out.Data))
+	}
+	marshaled, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("failed to marshal out: %v", err)
+	}
+	if !strings.Contains(string(marshaled), `"data":[]`) {
+		t.Errorf("expected JSON to serialize empty array \"data\":[], got %s", string(marshaled))
 	}
 	contentStr := fmt.Sprintf("%v", res.Content[0])
 	if !strings.Contains(contentStr, "invalid parameter: bad input") {
@@ -70,6 +84,23 @@ func TestFormatAPIError(t *testing.T) {
 		msg := formatAPIError(errors.New("unauthorized"), httpResp)
 		if !strings.Contains(msg, "status 401") || !strings.Contains(msg, "check API token") {
 			t.Errorf("expected status and hint in error message, got %q", msg)
+		}
+	})
+
+	t.Run("openAPI error with errno and errmsg body", func(t *testing.T) {
+		client, _ := newFakeAppliance(t, http.StatusNotFound, `{"errno":"6001","errmsg":"IP subnet not found"}`)
+		authCtx := client.AuthContext(t.Context())
+		_, httpResp, apiErr := client.IpamAPI.IpamNetworkInfo(authCtx).NetworkId(999).Execute()
+		closeBody(httpResp)
+		msg := formatAPIError(apiErr, httpResp)
+		if !strings.Contains(msg, "errno 6001") {
+			t.Errorf("expected error to contain errno 6001, got %q", msg)
+		}
+		if !strings.Contains(msg, "IP subnet not found") {
+			t.Errorf("expected error to contain errmsg, got %q", msg)
+		}
+		if !strings.Contains(msg, "status 404") {
+			t.Errorf("expected error to contain status 404, got %q", msg)
 		}
 	})
 }
@@ -134,5 +165,25 @@ func TestCommonListHandler(t *testing.T) {
 	}
 	if outErr.Data == nil {
 		t.Errorf("expected non-nil Data slice on error")
+	}
+}
+
+func TestCombineWhereClause(t *testing.T) {
+	tests := []struct {
+		fixed    string
+		user     string
+		expected string
+	}{
+		{"", "", ""},
+		{"space='corp'", "", "space='corp'"},
+		{"", "name='server1'", "name='server1'"},
+		{"space='corp'", "name='server1'", "(space='corp') AND (name='server1')"},
+	}
+
+	for _, tt := range tests {
+		got := CombineWhereClause(tt.fixed, tt.user)
+		if got != tt.expected {
+			t.Errorf("CombineWhereClause(%q, %q) = %q, want %q", tt.fixed, tt.user, got, tt.expected)
+		}
 	}
 }

@@ -205,6 +205,8 @@ func TestValidateDNSRecordValue(t *testing.T) {
 		{"invalid SRV record non-numeric port", "SRV", "10 60 port target.example.com", true},
 		{"valid CAA record", "CAA", "0 issue letsencrypt.org", false},
 		{"invalid CAA record bad flag", "CAA", "300 issue letsencrypt.org", true},
+		{"invalid CAA record invalid tag chars", "CAA", "0 !bad letsencrypt.org", true},
+		{"invalid CAA record tag too long", "CAA", "0 thisisalongtagmorethanfifteenchars letsencrypt.org", true},
 		{"valid TXT string", "TXT", "v=spf1 ~all", false},
 		{"empty value rejected", "A", "", true},
 		{"null byte rejected in value", "A", "192.0.2.1\x00", true},
@@ -247,12 +249,45 @@ func TestValidateDomainName(t *testing.T) {
 	}
 }
 
-func TestValidateRequiredStringNullBytes(t *testing.T) {
+func TestValidateRequiredString(t *testing.T) {
 	if err := ValidateRequiredString("normal", "param"); err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
+	if err := ValidateRequiredString("", "param"); err == nil {
+		t.Error("expected error for empty string")
+	}
+	if err := ValidateRequiredString("   ", "param"); err == nil {
+		t.Error("expected error for whitespace-only string")
+	}
 	if err := ValidateRequiredString("with\x00null", "param"); err == nil {
 		t.Error("expected error for string containing null byte")
+	}
+}
+
+func TestValidateOptionalString(t *testing.T) {
+	if err := ValidateOptionalString("", "param"); err != nil {
+		t.Errorf("unexpected error for empty string: %v", err)
+	}
+	if err := ValidateOptionalString("valid_string", "param"); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if err := ValidateOptionalString("with\x00null", "param"); err == nil {
+		t.Error("expected error for optional string containing null byte")
+	}
+}
+
+func TestValidatePositiveInt32(t *testing.T) {
+	if err := ValidatePositiveInt32(1, "id"); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if err := ValidatePositiveInt32(100, "id"); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if err := ValidatePositiveInt32(0, "id"); err == nil {
+		t.Error("expected error for 0")
+	}
+	if err := ValidatePositiveInt32(-5, "id"); err == nil {
+		t.Error("expected error for negative number")
 	}
 }
 

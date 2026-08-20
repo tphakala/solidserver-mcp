@@ -135,7 +135,7 @@ func dnsRecordCreateHandler(client *services.APIClientWrapper, logger *slog.Logg
 
 		rrType, err := validateDNSRecordCreateInput(&in)
 		if err != nil {
-			return validationErrorResult[DNSRecordCreateOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		in.Type = rrType
 
@@ -161,6 +161,7 @@ func dnsRecordCreateHandler(client *services.APIClientWrapper, logger *slog.Logg
 		resp, httpResp, err := req.Execute()
 		closeBody(httpResp)
 		if err != nil {
+			logger.Error("API error", "tool", "solidserver_dns_record_create", "error", err)
 			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
@@ -180,20 +181,20 @@ func dnsRecordDeleteHandler(client *services.APIClientWrapper, logger *slog.Logg
 		emptyOut := DNSRecordDeleteOut{Data: make([]sdsclient.DataInnerDnsRrDeleteSuccess, 0)}
 
 		if err := ValidateRequiredString(in.Zone, "zone"); err != nil {
-			return validationErrorResult[DNSRecordDeleteOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateRequiredString(in.Name, "name"); err != nil {
-			return validationErrorResult[DNSRecordDeleteOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		rrType, err := ValidateDNSRecordType(in.Type)
 		if err != nil {
-			return validationErrorResult[DNSRecordDeleteOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateOptionalString(in.Server, "server"); err != nil {
-			return validationErrorResult[DNSRecordDeleteOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateOptionalString(in.View, "view"); err != nil {
-			return validationErrorResult[DNSRecordDeleteOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		in.Type = rrType
 
@@ -214,6 +215,7 @@ func dnsRecordDeleteHandler(client *services.APIClientWrapper, logger *slog.Logg
 		resp, httpResp, err := req.Execute()
 		closeBody(httpResp)
 		if err != nil {
+			logger.Error("API error", "tool", "solidserver_dns_record_delete", "error", err)
 			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
@@ -242,6 +244,9 @@ func dnsRecordListHandler(client *services.APIClientWrapper, logger *slog.Logger
 				if apiErr != nil {
 					return nil, httpResp, apiErr
 				}
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
+				}
 				return resp.Data, httpResp, nil
 			})
 	}
@@ -261,6 +266,9 @@ func dnsZoneListHandler(client *services.APIClientWrapper, logger *slog.Logger) 
 				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
 					return nil, httpResp, apiErr
+				}
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
 				}
 				return resp.Data, httpResp, nil
 			})

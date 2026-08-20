@@ -93,14 +93,30 @@ func errorResult(format string, args ...any) *mcp.CallToolResult {
 // validationErrorResult builds a tool error result for client-side validation failures.
 //
 //nolint:unparam // Signature must match MCP tool handler return pattern (*mcp.CallToolResult, Out, error)
-func validationErrorResult[T any](err error) (*mcp.CallToolResult, T, error) {
-	var zero T
-	return errorResult("invalid parameter: %v", err), zero, nil
+func validationErrorResult[T any](err error, empty T) (*mcp.CallToolResult, T, error) {
+	return errorResult("invalid parameter: %v", err), empty, nil
 }
 
 type sdsErrorPayload struct {
 	Errno  string `json:"errno"`
 	Errmsg string `json:"errmsg"`
+}
+
+func httpStatusHint(status int) string {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return " (check API token credentials and permissions)"
+	case http.StatusNotFound:
+		return " (verify target space, zone, or resource exists)"
+	case http.StatusConflict:
+		return " (resource already exists or conflicts with existing state)"
+	case http.StatusTooManyRequests:
+		return " (rate limit exceeded; back off and retry)"
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
+		return " (SOLIDserver appliance error)"
+	default:
+		return ""
+	}
 }
 
 // formatAPIError parses errors from the SolidServer API client, extracting HTTP status,
@@ -127,25 +143,22 @@ func formatAPIError(err error, httpResp *http.Response) string {
 		}
 	}
 
-	var hint string
-	switch status {
-	case http.StatusUnauthorized, http.StatusForbidden:
-		hint = " (check API token credentials and permissions)"
-	case http.StatusNotFound:
-		hint = " (verify target space, zone, or resource exists)"
-	case http.StatusConflict:
-		hint = " (resource already exists or conflicts with existing state)"
-	case http.StatusTooManyRequests:
-		hint = " (rate limit exceeded; back off and retry)"
-	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
-		hint = " (SOLIDserver appliance error)"
-	}
-
+	hint := httpStatusHint(status)
 	if errno != "" || errmsg != "" {
-		if status != 0 {
-			return fmt.Sprintf("SolidServer API error (status %d, errno %s): %s%s", status, errno, errmsg, hint)
+		errDetails := errmsg
+		if errDetails == "" {
+			errDetails = err.Error()
 		}
-		return fmt.Sprintf("SolidServer API error (errno %s): %s%s", errno, errmsg, hint)
+		if errno != "" {
+			if status != 0 {
+				return fmt.Sprintf("SolidServer API error (status %d, errno %s): %s%s", status, errno, errDetails, hint)
+			}
+			return fmt.Sprintf("SolidServer API error (errno %s): %s%s", errno, errDetails, hint)
+		}
+		if status != 0 {
+			return fmt.Sprintf("SolidServer API error (status %d): %s%s", status, errDetails, hint)
+		}
+		return fmt.Sprintf("SolidServer API error: %s%s", errDetails, hint)
 	}
 
 	if status != 0 {
@@ -231,4 +244,15 @@ func commonListHandler[T any](
 		Offset: opts.Offset,
 	}
 	return jsonResult(out), out, nil
+}
+
+// CombineWhereClause combines a fixed appliance filter (e.g. space_name='...') with an optional user WHERE clause.
+func CombineWhereClause(fixed, user string) string {
+	if fixed == "" {
+		return user
+	}
+	if user == "" {
+		return fixed
+	}
+	return fmt.Sprintf("(%s) AND (%s)", fixed, user)
 }

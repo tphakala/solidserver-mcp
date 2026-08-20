@@ -111,6 +111,9 @@ func vlanDomainListHandler(client *services.APIClientWrapper, logger *slog.Logge
 				if apiErr != nil {
 					return nil, httpResp, apiErr
 				}
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
+				}
 				return resp.Data, httpResp, nil
 			})
 	}
@@ -118,25 +121,19 @@ func vlanDomainListHandler(client *services.APIClientWrapper, logger *slog.Logge
 
 func vlanListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanListInput) (*mcp.CallToolResult, VlanListOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanListInput) (*mcp.CallToolResult, VlanListOut, error) {
+		emptyOut := VlanListOut{Data: make([]sdsclient.DataInnerVlanVlanData, 0)}
 		if err := ValidateOptionalString(in.Domain, "domain"); err != nil {
-			return validationErrorResult[VlanListOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
 		return commonListHandler(ctx, opts, logger, "solidserver_vlan_list",
 			func(c context.Context, where string, limit, offset int32) ([]sdsclient.DataInnerVlanVlanData, *http.Response, error) {
-				w := ""
+				fixed := ""
 				if in.Domain != "" {
-					w = fmt.Sprintf("domain_name='%s'", EscapeWhereValue(in.Domain))
+					fixed = fmt.Sprintf("domain_name='%s'", EscapeWhereValue(in.Domain))
 				}
-				if where != "" {
-					if w != "" {
-						w = fmt.Sprintf("(%s) AND (%s)", w, where)
-					} else {
-						w = where
-					}
-				}
-
+				w := CombineWhereClause(fixed, where)
 				authCtx := client.AuthContext(c)
 				req := client.VlanAPI.VlanVlanList(authCtx).Limit(limit).Offset(offset)
 				if w != "" {
@@ -145,6 +142,9 @@ func vlanListHandler(client *services.APIClientWrapper, logger *slog.Logger) fun
 				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
 					return nil, httpResp, apiErr
+				}
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
 				}
 				return resp.Data, httpResp, nil
 			})
@@ -156,13 +156,13 @@ func vlanCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 		emptyOut := VlanCreateOut{Data: make([]sdsclient.DataInnerVlanVlanAddSuccess, 0)}
 
 		if err := ValidateRequiredString(in.Domain, "domain"); err != nil {
-			return validationErrorResult[VlanCreateOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateRequiredString(in.Name, "name"); err != nil {
-			return validationErrorResult[VlanCreateOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateVlanID(in.VlanID); err != nil {
-			return validationErrorResult[VlanCreateOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		logger.Info("creating VLAN", "name", in.Name, "vlan_id", in.VlanID, "domain", in.Domain)
@@ -177,6 +177,7 @@ func vlanCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 		resp, httpResp, err := req.Execute()
 		closeBody(httpResp)
 		if err != nil {
+			logger.Error("API error", "tool", "solidserver_vlan_create", "error", err)
 			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
@@ -196,10 +197,10 @@ func vlanDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 		emptyOut := VlanDeleteOut{Data: make([]sdsclient.DataInnerVlanVlanDeleteSuccess, 0)}
 
 		if err := ValidateRequiredString(in.Domain, "domain"); err != nil {
-			return validationErrorResult[VlanDeleteOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateRequiredString(in.Name, "name"); err != nil {
-			return validationErrorResult[VlanDeleteOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		logger.Info("deleting VLAN", "name", in.Name, "domain", in.Domain)
@@ -211,6 +212,7 @@ func vlanDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 		resp, httpResp, err := req.Execute()
 		closeBody(httpResp)
 		if err != nil {
+			logger.Error("API error", "tool", "solidserver_vlan_delete", "error", err)
 			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 

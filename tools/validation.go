@@ -2,9 +2,11 @@ package tools
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -55,6 +57,14 @@ var allowedDNSRecordTypes = map[string]struct{}{
 	TypeDS:     {},
 	TypeDNSKEY: {},
 	TypeDNAME:  {},
+}
+
+var allowedDNSRecordTypesList string
+
+func init() {
+	types := slices.Collect(maps.Keys(allowedDNSRecordTypes))
+	slices.Sort(types)
+	allowedDNSRecordTypesList = strings.Join(types, ", ")
 }
 
 // dhcpMACRegex matches SolidServer DHCP MAC formats:
@@ -276,7 +286,7 @@ func ValidateDNSRecordType(rrType string) (string, error) {
 	}
 	upper := strings.ToUpper(strings.TrimSpace(rrType))
 	if _, ok := allowedDNSRecordTypes[upper]; !ok {
-		return "", fmt.Errorf("unsupported DNS record type %q (allowed types: A, AAAA, CNAME, MX, TXT, PTR, SRV, NS, SOA, CAA, NAPTR, SPF)", rrType)
+		return "", fmt.Errorf("unsupported DNS record type %q (allowed types: %s)", rrType, allowedDNSRecordTypesList)
 	}
 	return upper, nil
 }
@@ -311,6 +321,8 @@ func validateSRVRecordValue(value string) error {
 	return ValidateDomainName(parts[3], "DNS SRV record target")
 }
 
+const maxCAATagLength = 15
+
 func validateCAARecordValue(value string) error {
 	parts := strings.Fields(value)
 	if len(parts) < minCAAFieldCnt {
@@ -319,6 +331,15 @@ func validateCAARecordValue(value string) error {
 	flags, err := strconv.Atoi(parts[0])
 	if err != nil || flags < 0 || flags > maxCAAFlags {
 		return fmt.Errorf("DNS CAA record flags %q must be an integer between 0 and 255", parts[0])
+	}
+	tag := parts[1]
+	if tag == "" || len(tag) > maxCAATagLength {
+		return fmt.Errorf("DNS CAA record tag %q must contain 1 to 15 ASCII letters or digits", tag)
+	}
+	for _, r := range tag {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return fmt.Errorf("DNS CAA record tag %q must contain only ASCII letters or digits", tag)
+		}
 	}
 	return nil
 }

@@ -154,7 +154,7 @@ func ipCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) fun
 		emptyOut := IPCreateOut{Data: make([]sdsclient.DataInnerIpamAddressAddSuccess, 0)}
 
 		if err := validateIPCreateInput(&in); err != nil {
-			return validationErrorResult[IPCreateOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		input := sdsclient.IpamAddressAddInput{
@@ -185,6 +185,7 @@ func ipCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) fun
 		resp, httpResp, err := req.Execute()
 		closeBody(httpResp)
 		if err != nil {
+			logger.Error("API error", "tool", "solidserver_ip_create", "error", err)
 			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
@@ -204,10 +205,10 @@ func ipDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) fun
 		emptyOut := IPDeleteOut{Data: make([]sdsclient.DataInnerIpamAddressDeleteSuccess, 0)}
 
 		if err := ValidateRequiredString(in.Space, "space"); err != nil {
-			return validationErrorResult[IPDeleteOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateIP(in.IPAddress, "ip_address"); err != nil {
-			return validationErrorResult[IPDeleteOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		logger.Info("deleting IP address", "ip", in.IPAddress, "space", in.Space)
@@ -219,6 +220,7 @@ func ipDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) fun
 		resp, httpResp, err := req.Execute()
 		closeBody(httpResp)
 		if err != nil {
+			logger.Error("API error", "tool", "solidserver_ip_delete", "error", err)
 			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
@@ -235,11 +237,12 @@ func ipDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) fun
 
 func ipFindFreeHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, IPFindFreeInput) (*mcp.CallToolResult, IPFindFreeOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPFindFreeInput) (*mcp.CallToolResult, IPFindFreeOut, error) {
+		emptyOut := IPFindFreeOut{Data: make([]sdsclient.DataInnerIpamAddressData, 0)}
 		if err := ValidateRequiredString(in.Space, "space"); err != nil {
-			return validationErrorResult[IPFindFreeOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateIP(in.Subnet, "subnet"); err != nil {
-			return validationErrorResult[IPFindFreeOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		limit := in.Limit
@@ -260,6 +263,9 @@ func ipFindFreeHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 				if apiErr != nil {
 					return nil, httpResp, apiErr
 				}
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
+				}
 				return resp.Data, httpResp, nil
 			})
 	}
@@ -268,17 +274,15 @@ func ipFindFreeHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 //nolint:dupl // similar list logic across modules
 func ipListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, IPListInput) (*mcp.CallToolResult, IPListOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPListInput) (*mcp.CallToolResult, IPListOut, error) {
+		emptyOut := IPListOut{Data: make([]sdsclient.DataInnerIpamAddressData, 0)}
 		if err := ValidateRequiredString(in.Space, "space"); err != nil {
-			return validationErrorResult[IPListOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
 		return commonListHandler(ctx, opts, logger, "solidserver_ip_list",
 			func(c context.Context, where string, limit, offset int32) ([]sdsclient.DataInnerIpamAddressData, *http.Response, error) {
-				w := fmt.Sprintf("space_name='%s'", EscapeWhereValue(in.Space))
-				if where != "" {
-					w = fmt.Sprintf("(%s) AND (%s)", w, where)
-				}
+				w := CombineWhereClause(fmt.Sprintf("space_name='%s'", EscapeWhereValue(in.Space)), where)
 				authCtx := client.AuthContext(c)
 				req := client.IpamAPI.IpamAddressList(authCtx).
 					Where(w).
@@ -287,6 +291,9 @@ func ipListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(
 				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
 					return nil, httpResp, apiErr
+				}
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
 				}
 				return resp.Data, httpResp, nil
 			})

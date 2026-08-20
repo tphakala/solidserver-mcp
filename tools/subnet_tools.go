@@ -119,17 +119,15 @@ func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper, logge
 //nolint:dupl // similar list logic across modules
 func subnetListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetListInput) (*mcp.CallToolResult, SubnetListOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetListInput) (*mcp.CallToolResult, SubnetListOut, error) {
+		emptyOut := SubnetListOut{Data: make([]sdsclient.DataInnerIpamNetworkData, 0)}
 		if err := ValidateRequiredString(in.Space, "space"); err != nil {
-			return validationErrorResult[SubnetListOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
 		return commonListHandler(ctx, opts, logger, "solidserver_subnet_list",
 			func(c context.Context, where string, limit, offset int32) ([]sdsclient.DataInnerIpamNetworkData, *http.Response, error) {
-				w := fmt.Sprintf("site_name='%s'", EscapeWhereValue(in.Space))
-				if where != "" {
-					w = fmt.Sprintf("(%s) AND (%s)", w, where)
-				}
+				w := CombineWhereClause(fmt.Sprintf("site_name='%s'", EscapeWhereValue(in.Space)), where)
 				authCtx := client.AuthContext(c)
 				req := client.IpamAPI.IpamNetworkList(authCtx).
 					Where(w).
@@ -138,6 +136,9 @@ func subnetListHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
 					return nil, httpResp, apiErr
+				}
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
 				}
 				return resp.Data, httpResp, nil
 			})
@@ -149,7 +150,7 @@ func subnetInfoHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 		emptyOut := SubnetInfoOut{Data: make([]sdsclient.DataInnerIpamNetworkData, 0)}
 
 		if err := ValidatePositiveInt32(in.ID, "id"); err != nil {
-			return validationErrorResult[SubnetInfoOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		logger.Debug("getting subnet info", "id", in.ID)
@@ -158,6 +159,7 @@ func subnetInfoHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 		resp, httpResp, err := req.Execute()
 		closeBody(httpResp)
 		if err != nil {
+			logger.Error("API error", "tool", "solidserver_subnet_info", "error", err)
 			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
@@ -177,13 +179,13 @@ func subnetCreateHandler(client *services.APIClientWrapper, logger *slog.Logger)
 		emptyOut := SubnetCreateOut{Data: make([]sdsclient.DataInnerIpamNetworkAddSuccess, 0)}
 
 		if err := ValidateRequiredString(in.Space, "space"); err != nil {
-			return validationErrorResult[SubnetCreateOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateRequiredString(in.Name, "name"); err != nil {
-			return validationErrorResult[SubnetCreateOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateSubnetPrefix(in.Address, in.Prefix); err != nil {
-			return validationErrorResult[SubnetCreateOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		logger.Info("creating subnet", "name", in.Name, "address", in.Address, "prefix", in.Prefix, "space", in.Space)
@@ -199,6 +201,7 @@ func subnetCreateHandler(client *services.APIClientWrapper, logger *slog.Logger)
 		resp, httpResp, err := req.Execute()
 		closeBody(httpResp)
 		if err != nil {
+			logger.Error("API error", "tool", "solidserver_subnet_create", "error", err)
 			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
@@ -218,10 +221,10 @@ func subnetDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger)
 		emptyOut := SubnetDeleteOut{Data: make([]sdsclient.DataInnerIpamNetworkDeleteSuccess, 0)}
 
 		if err := ValidateRequiredString(in.Space, "space"); err != nil {
-			return validationErrorResult[SubnetDeleteOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateIP(in.Address, "address"); err != nil {
-			return validationErrorResult[SubnetDeleteOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		logger.Info("deleting subnet", "address", in.Address, "space", in.Space)
@@ -233,6 +236,7 @@ func subnetDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger)
 		resp, httpResp, err := req.Execute()
 		closeBody(httpResp)
 		if err != nil {
+			logger.Error("API error", "tool", "solidserver_subnet_delete", "error", err)
 			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
@@ -261,6 +265,9 @@ func spaceListHandler(client *services.APIClientWrapper, logger *slog.Logger) fu
 				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
 					return nil, httpResp, apiErr
+				}
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
 				}
 				return resp.Data, httpResp, nil
 			})

@@ -147,6 +147,9 @@ func dhcpServerListHandler(client *services.APIClientWrapper, logger *slog.Logge
 				if apiErr != nil {
 					return nil, httpResp, apiErr
 				}
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
+				}
 				return resp.Data, httpResp, nil
 			})
 	}
@@ -165,6 +168,9 @@ func dhcpScopeListHandler(client *services.APIClientWrapper, logger *slog.Logger
 				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
 					return nil, httpResp, apiErr
+				}
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
 				}
 				return resp.Data, httpResp, nil
 			})
@@ -185,6 +191,9 @@ func dhcpRangeListHandler(client *services.APIClientWrapper, logger *slog.Logger
 				if apiErr != nil {
 					return nil, httpResp, apiErr
 				}
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
+				}
 				return resp.Data, httpResp, nil
 			})
 	}
@@ -204,6 +213,9 @@ func dhcpLeaseListHandler(client *services.APIClientWrapper, logger *slog.Logger
 				if apiErr != nil {
 					return nil, httpResp, apiErr
 				}
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
+				}
 				return resp.Data, httpResp, nil
 			})
 	}
@@ -214,16 +226,16 @@ func dhcpStaticAddHandler(client *services.APIClientWrapper, logger *slog.Logger
 		emptyOut := DhcpStaticAddOut{Data: make([]sdsclient.DataInnerDhcpStaticAddSuccess, 0)}
 
 		if err := ValidateRequiredString(in.Server, "server"); err != nil {
-			return validationErrorResult[DhcpStaticAddOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateRequiredString(in.Name, "name"); err != nil {
-			return validationErrorResult[DhcpStaticAddOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateIP(in.IP, "ip"); err != nil {
-			return validationErrorResult[DhcpStaticAddOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateDHCPMAC(in.MAC, "mac"); err != nil {
-			return validationErrorResult[DhcpStaticAddOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		logger.Info("adding static DHCP reservation", "name", in.Name, "ip", in.IP, "mac", in.MAC, "server", in.Server)
@@ -239,6 +251,7 @@ func dhcpStaticAddHandler(client *services.APIClientWrapper, logger *slog.Logger
 		resp, httpResp, err := req.Execute()
 		closeBody(httpResp)
 		if err != nil {
+			logger.Error("API error", "tool", "solidserver_dhcp_static_add", "error", err)
 			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
@@ -258,10 +271,10 @@ func dhcpStaticDeleteHandler(client *services.APIClientWrapper, logger *slog.Log
 		emptyOut := DhcpStaticDeleteOut{Data: make([]sdsclient.DataInnerDhcpStaticDeleteSuccess, 0)}
 
 		if err := ValidateRequiredString(in.Server, "server"); err != nil {
-			return validationErrorResult[DhcpStaticDeleteOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateIP(in.IP, "ip"); err != nil {
-			return validationErrorResult[DhcpStaticDeleteOut](err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		logger.Info("deleting static DHCP reservation", "ip", in.IP, "server", in.Server)
@@ -273,6 +286,7 @@ func dhcpStaticDeleteHandler(client *services.APIClientWrapper, logger *slog.Log
 		resp, httpResp, err := req.Execute()
 		closeBody(httpResp)
 		if err != nil {
+			logger.Error("API error", "tool", "solidserver_dhcp_static_delete", "error", err)
 			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
