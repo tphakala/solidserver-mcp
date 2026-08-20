@@ -101,11 +101,15 @@ func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper, logge
 //nolint:dupl // similar list logic across modules
 func subnetListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetListInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetListInput) (*mcp.CallToolResult, any, error) {
+		if err := ValidateRequiredString(in.Space, "space"); err != nil {
+			return validationErrorResult(err)
+		}
+
 		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
 		return commonListHandler(ctx, opts, logger, "solidserver_subnet_list",
 			func(c context.Context, where string, limit, offset int32) (any, error) {
-				w := fmt.Sprintf("site_name='%s'", in.Space)
+				w := fmt.Sprintf("site_name='%s'", EscapeWhereValue(in.Space))
 				if where != "" {
 					w = fmt.Sprintf("(%s) AND (%s)", w, where)
 				}
@@ -125,6 +129,10 @@ func subnetListHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 
 func subnetInfoHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetInfoInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetInfoInput) (*mcp.CallToolResult, any, error) {
+		if err := ValidatePositiveInt32(in.ID, "id"); err != nil {
+			return validationErrorResult(err)
+		}
+
 		logger.Debug("getting subnet info", "id", in.ID)
 		authCtx := client.AuthContext(ctx)
 		req := client.IpamAPI.IpamNetworkInfo(authCtx).NetworkId(in.ID)
@@ -141,6 +149,16 @@ func subnetInfoHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 
 func subnetCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetCreateInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetCreateInput) (*mcp.CallToolResult, any, error) {
+		if err := ValidateRequiredString(in.Space, "space"); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateRequiredString(in.Name, "name"); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateSubnetPrefix(in.Address, in.Prefix); err != nil {
+			return validationErrorResult(err)
+		}
+
 		logger.Info("creating subnet", "name", in.Name, "address", in.Address, "prefix", in.Prefix, "space", in.Space)
 		input := sdsclient.IpamNetworkAddInput{
 			SpaceName:     &in.Space,
@@ -164,6 +182,13 @@ func subnetCreateHandler(client *services.APIClientWrapper, logger *slog.Logger)
 
 func subnetDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetDeleteInput) (*mcp.CallToolResult, any, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetDeleteInput) (*mcp.CallToolResult, any, error) {
+		if err := ValidateRequiredString(in.Space, "space"); err != nil {
+			return validationErrorResult(err)
+		}
+		if err := ValidateIP(in.Address, "address"); err != nil {
+			return validationErrorResult(err)
+		}
+
 		logger.Info("deleting subnet", "address", in.Address, "space", in.Space)
 		authCtx := client.AuthContext(ctx)
 		req := client.IpamAPI.IpamNetworkDelete(authCtx).
