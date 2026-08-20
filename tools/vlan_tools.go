@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"github.com/efficientip-labs/solidserver-go-client/sdsclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -33,6 +34,18 @@ type VlanCreateInput struct {
 type VlanDeleteInput struct {
 	Domain string `json:"domain" jsonschema:"The name of the VLAN domain."`
 	Name   string `json:"name" jsonschema:"The name of the VLAN to delete."`
+}
+
+// VLAN Output Structs
+type VlanDomainListOut = ListOutput[sdsclient.DataInnerVlanDomainData]
+type VlanListOut = ListOutput[sdsclient.DataInnerVlanVlanData]
+
+type VlanCreateOut struct {
+	Data []sdsclient.DataInnerVlanVlanAddSuccess `json:"data" jsonschema:"Created VLAN response records."`
+}
+
+type VlanDeleteOut struct {
+	Data []sdsclient.DataInnerVlanVlanDeleteSuccess `json:"data" jsonschema:"Deleted VLAN response records."`
 }
 
 // RegisterVlanTools registers VLAN management tools.
@@ -84,68 +97,72 @@ func RegisterVlanTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 	}, vlanDeleteHandler(client, logger))
 }
 
-func vlanDomainListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanDomainListInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanDomainListInput) (*mcp.CallToolResult, any, error) {
-		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
-		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
+func vlanDomainListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanDomainListInput) (*mcp.CallToolResult, VlanDomainListOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanDomainListInput) (*mcp.CallToolResult, VlanDomainListOut, error) {
+		opts := ListOptions(in)
 		return commonListHandler(ctx, opts, logger, "solidserver_vlan_domain_list",
-			func(c context.Context, where string, limit, offset int32) (any, error) {
+			func(c context.Context, where string, limit, offset int32) ([]sdsclient.DataInnerVlanDomainData, *http.Response, error) {
 				authCtx := client.AuthContext(c)
 				req := client.VlanAPI.VlanDomainList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
-				resp, _, apiErr := req.Execute()
+				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
-					return nil, apiErr
+					return nil, httpResp, apiErr
 				}
-				return resp, nil
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
+				}
+				return resp.Data, httpResp, nil
 			})
 	}
 }
 
-func vlanListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanListInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanListInput) (*mcp.CallToolResult, any, error) {
-		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
+func vlanListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanListInput) (*mcp.CallToolResult, VlanListOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanListInput) (*mcp.CallToolResult, VlanListOut, error) {
+		emptyOut := VlanListOut{Data: make([]sdsclient.DataInnerVlanVlanData, 0)}
+		if err := ValidateOptionalString(in.Domain, "domain"); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
 		return commonListHandler(ctx, opts, logger, "solidserver_vlan_list",
-			func(c context.Context, where string, limit, offset int32) (any, error) {
-				w := ""
+			func(c context.Context, where string, limit, offset int32) ([]sdsclient.DataInnerVlanVlanData, *http.Response, error) {
+				fixed := ""
 				if in.Domain != "" {
-					w = fmt.Sprintf("domain_name='%s'", EscapeWhereValue(in.Domain))
+					fixed = fmt.Sprintf("domain_name='%s'", EscapeWhereValue(in.Domain))
 				}
-				if where != "" {
-					if w != "" {
-						w = fmt.Sprintf("(%s) AND (%s)", w, where)
-					} else {
-						w = where
-					}
-				}
-
+				w := CombineWhereClause(fixed, where)
 				authCtx := client.AuthContext(c)
 				req := client.VlanAPI.VlanVlanList(authCtx).Limit(limit).Offset(offset)
 				if w != "" {
 					req = req.Where(w)
 				}
-				resp, _, apiErr := req.Execute()
+				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
-					return nil, apiErr
+					return nil, httpResp, apiErr
 				}
-				return resp, nil
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
+				}
+				return resp.Data, httpResp, nil
 			})
 	}
 }
 
-func vlanCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanCreateInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanCreateInput) (*mcp.CallToolResult, any, error) {
+func vlanCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanCreateInput) (*mcp.CallToolResult, VlanCreateOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanCreateInput) (*mcp.CallToolResult, VlanCreateOut, error) {
+		emptyOut := VlanCreateOut{Data: make([]sdsclient.DataInnerVlanVlanAddSuccess, 0)}
+
 		if err := ValidateRequiredString(in.Domain, "domain"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateRequiredString(in.Name, "name"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateVlanID(in.VlanID); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		logger.Info("creating VLAN", "name", in.Name, "vlan_id", in.VlanID, "domain", in.Domain)
@@ -157,24 +174,33 @@ func vlanCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 
 		authCtx := client.AuthContext(ctx)
 		req := client.VlanAPI.VlanVlanAdd(authCtx).VlanVlanAddInput(input)
-		resp, _, err := req.Execute()
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
 		if err != nil {
-			r, a := errorResult("SolidServer API error: %v", err)
-			return r, a, nil
+			logger.Error("API error", "tool", "solidserver_vlan_create", "error", err)
+			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
-		r, a := jsonResult(resp)
-		return r, a, nil
+		var data []sdsclient.DataInnerVlanVlanAddSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerVlanVlanAddSuccess, 0)
+		}
+		out := VlanCreateOut{Data: data}
+		return jsonResult(out), out, nil
 	}
 }
 
-func vlanDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanDeleteInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanDeleteInput) (*mcp.CallToolResult, any, error) {
+func vlanDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanDeleteInput) (*mcp.CallToolResult, VlanDeleteOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanDeleteInput) (*mcp.CallToolResult, VlanDeleteOut, error) {
+		emptyOut := VlanDeleteOut{Data: make([]sdsclient.DataInnerVlanVlanDeleteSuccess, 0)}
+
 		if err := ValidateRequiredString(in.Domain, "domain"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateRequiredString(in.Name, "name"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		logger.Info("deleting VLAN", "name", in.Name, "domain", in.Domain)
@@ -183,13 +209,20 @@ func vlanDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 			DomainName(in.Domain).
 			VlanName(in.Name)
 
-		resp, _, err := req.Execute()
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
 		if err != nil {
-			r, a := errorResult("SolidServer API error: %v", err)
-			return r, a, nil
+			logger.Error("API error", "tool", "solidserver_vlan_delete", "error", err)
+			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
-		r, a := jsonResult(resp)
-		return r, a, nil
+		var data []sdsclient.DataInnerVlanVlanDeleteSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerVlanVlanDeleteSuccess, 0)
+		}
+		out := VlanDeleteOut{Data: data}
+		return jsonResult(out), out, nil
 	}
 }

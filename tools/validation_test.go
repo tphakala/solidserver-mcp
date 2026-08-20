@@ -192,8 +192,25 @@ func TestValidateDNSRecordValue(t *testing.T) {
 		{"valid AAAA record IPv6", "AAAA", "2001:db8::1", false},
 		{"invalid AAAA record IPv4", "AAAA", "192.0.2.1", true},
 		{"valid CNAME host", "CNAME", "target.example.com", false},
+		{"valid CNAME trailing dot", "CNAME", "target.example.com.", false},
+		{"invalid CNAME invalid chars", "CNAME", "target!example.com", true},
+		{"valid PTR host", "PTR", "host.example.com", false},
+		{"valid NS host", "NS", "ns1.example.com", false},
+		{"valid MX preference and exchange", "MX", "10 mail.example.com", false},
+		{"valid MX exchange only", "MX", "mail.example.com", false},
+		{"invalid MX bad preference", "MX", "abc mail.example.com", true},
+		{"invalid MX out of range preference", "MX", "70000 mail.example.com", true},
+		{"valid SRV record", "SRV", "10 60 5060 bigbox.example.com", false},
+		{"invalid SRV record missing fields", "SRV", "10 60 5060", true},
+		{"invalid SRV record non-numeric port", "SRV", "10 60 port target.example.com", true},
+		{"valid CAA record", "CAA", "0 issue letsencrypt.org", false},
+		{"invalid CAA record bad flag", "CAA", "300 issue letsencrypt.org", true},
+		{"invalid CAA record invalid tag chars", "CAA", "0 !bad letsencrypt.org", true},
+		{"invalid CAA record tag too long", "CAA", "0 thisisalongtagmorethanfifteenchars letsencrypt.org", true},
 		{"valid TXT string", "TXT", "v=spf1 ~all", false},
 		{"empty value rejected", "A", "", true},
+		{"null byte rejected in value", "A", "192.0.2.1\x00", true},
+		{"null byte rejected in CNAME", "CNAME", "host\x00.com", true},
 	}
 
 	for _, tt := range tests {
@@ -206,25 +223,93 @@ func TestValidateDNSRecordValue(t *testing.T) {
 	}
 }
 
+func TestValidateDomainName(t *testing.T) {
+	tests := []struct {
+		name    string
+		domain  string
+		wantErr bool
+	}{
+		{"valid single label", "localhost", false},
+		{"valid fqdn", "sub.example.com", false},
+		{"valid with trailing dot", "sub.example.com.", false},
+		{"empty domain", "", true},
+		{"domain with null byte", "sub\x00.example.com", true},
+		{"label starting with hyphen", "-sub.example.com", true},
+		{"label ending with hyphen", "sub-.example.com", true},
+		{"label with special char", "sub!example.com", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDomainName(tt.domain, "domain")
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateDomainName(%q) error = %v, wantErr %v", tt.domain, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateRequiredString(t *testing.T) {
+	if err := ValidateRequiredString("normal", "param"); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if err := ValidateRequiredString("", "param"); err == nil {
+		t.Error("expected error for empty string")
+	}
+	if err := ValidateRequiredString("   ", "param"); err == nil {
+		t.Error("expected error for whitespace-only string")
+	}
+	if err := ValidateRequiredString("with\x00null", "param"); err == nil {
+		t.Error("expected error for string containing null byte")
+	}
+}
+
+func TestValidateOptionalString(t *testing.T) {
+	if err := ValidateOptionalString("", "param"); err != nil {
+		t.Errorf("unexpected error for empty string: %v", err)
+	}
+	if err := ValidateOptionalString("valid_string", "param"); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if err := ValidateOptionalString("with\x00null", "param"); err == nil {
+		t.Error("expected error for optional string containing null byte")
+	}
+}
+
+func TestValidatePositiveInt32(t *testing.T) {
+	if err := ValidatePositiveInt32(1, "id"); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if err := ValidatePositiveInt32(100, "id"); err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+	if err := ValidatePositiveInt32(0, "id"); err == nil {
+		t.Error("expected error for 0")
+	}
+	if err := ValidatePositiveInt32(-5, "id"); err == nil {
+		t.Error("expected error for negative number")
+	}
+}
+
 func TestValidateVlanID(t *testing.T) {
 	tests := []struct {
 		name    string
-		id      int32
+		vlanID  int32
 		wantErr bool
 	}{
 		{"valid vlan 1", 1, false},
 		{"valid vlan 100", 100, false},
 		{"valid vlan 4094", 4094, false},
 		{"invalid vlan 0", 0, true},
-		{"invalid vlan negative", -10, true},
+		{"invalid vlan negative", -5, true},
 		{"invalid vlan 4095", 4095, true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateVlanID(tt.id)
+			err := ValidateVlanID(tt.vlanID)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateVlanID(%d) error = %v, wantErr %v", tt.id, err, tt.wantErr)
+				t.Errorf("ValidateVlanID(%d) error = %v, wantErr %v", tt.vlanID, err, tt.wantErr)
 			}
 		})
 	}
@@ -232,21 +317,21 @@ func TestValidateVlanID(t *testing.T) {
 
 func TestEscapeWhereValue(t *testing.T) {
 	tests := []struct {
-		name string
-		in   string
-		want string
+		name     string
+		input    string
+		expected string
 	}{
-		{"plain string", "default", "default"},
-		{"string with single quote", "corp's space", `corp\'s space`},
-		{"string with sql injection attempt", `' OR '1'='1`, `\' OR \'1\'=\'1`},
-		{"string with backslash and quote", `foo\bar'baz`, `foo\\bar\'baz`},
+		{"plain string", "simple", "simple"},
+		{"string with single quote", "o'reilly", `o\'reilly`},
+		{"string with sql injection attempt", "test' OR '1'='1", `test\' OR \'1\'=\'1`},
+		{"string with backslash and quote", `path\to\'file'`, `path\\to\\\'file\'`},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := EscapeWhereValue(tt.in)
-			if got != tt.want {
-				t.Errorf("EscapeWhereValue(%q) = %q, want %q", tt.in, got, tt.want)
+			got := EscapeWhereValue(tt.input)
+			if got != tt.expected {
+				t.Errorf("EscapeWhereValue(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
 	}
@@ -259,11 +344,15 @@ func TestValidateWhereClause(t *testing.T) {
 		wantErr bool
 	}{
 		{"empty where allowed", "", false},
-		{"valid where clause with matched quotes", "vlan_name LIKE 'guest%'", false},
-		{"valid where clause with multiple pairs", "domain_name='corp' AND vlan_id='10'", false},
-		{"valid where clause with escaped quote", `vlan_name='O\'Reilly'`, false},
-		{"unbalanced single quote", "vlan_name = 'guest", true},
-		{"null byte rejected", "vlan_name = 'guest'\x00", true},
+		{"valid where clause with matched quotes", "name='test' AND active='1'", false},
+		{"valid where clause with multiple pairs", "a='1' AND b='2'", false},
+		{"valid where clause with escaped quote", `name='it\'s fine'`, false},
+		{"valid where clause with balanced parens", "(a='1' OR b='2') AND (c='3')", false},
+		{"valid parens inside quoted string", "name='(test)'", false},
+		{"unbalanced single quote", "name='test", true},
+		{"null byte rejected", "name='test\x00'", true},
+		{"unbalanced parens too many closing", "1=1) OR (1=1", true},
+		{"unbalanced parens unclosed", "(1=1 AND (2=2)", true},
 	}
 
 	for _, tt := range tests {

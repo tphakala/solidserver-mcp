@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"log/slog"
+	"net/http"
 
 	"github.com/efficientip-labs/solidserver-go-client/sdsclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -44,6 +45,20 @@ type DhcpStaticAddInput struct {
 type DhcpStaticDeleteInput struct {
 	Server string `json:"server" jsonschema:"The name of the DHCP server."`
 	IP     string `json:"ip" jsonschema:"The IP address of the reservation to delete."`
+}
+
+// DHCP Output Structs
+type DhcpServerListOut = ListOutput[sdsclient.DataInnerDhcpServerData]
+type DhcpScopeListOut = ListOutput[sdsclient.DataInnerDhcpScopeData]
+type DhcpRangeListOut = ListOutput[sdsclient.DataInnerDhcpRangeData]
+type DhcpLeaseListOut = ListOutput[sdsclient.DataInnerDhcpLeaseData]
+
+type DhcpStaticAddOut struct {
+	Data []sdsclient.DataInnerDhcpStaticAddSuccess `json:"data" jsonschema:"Created static DHCP reservation records."`
+}
+
+type DhcpStaticDeleteOut struct {
+	Data []sdsclient.DataInnerDhcpStaticDeleteSuccess `json:"data" jsonschema:"Deleted static DHCP reservation response records."`
 }
 
 // RegisterDhcpTools registers DHCP management tools.
@@ -118,99 +133,109 @@ func RegisterDhcpTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 	}, dhcpStaticDeleteHandler(client, logger))
 }
 
-func dhcpServerListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpServerListInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpServerListInput) (*mcp.CallToolResult, any, error) {
-		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
-		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
+func dhcpServerListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpServerListInput) (*mcp.CallToolResult, DhcpServerListOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpServerListInput) (*mcp.CallToolResult, DhcpServerListOut, error) {
+		opts := ListOptions(in)
 		return commonListHandler(ctx, opts, logger, "solidserver_dhcp_server_list",
-			func(c context.Context, where string, limit, offset int32) (any, error) {
+			func(c context.Context, where string, limit, offset int32) ([]sdsclient.DataInnerDhcpServerData, *http.Response, error) {
 				authCtx := client.AuthContext(c)
 				req := client.DhcpAPI.DhcpServerList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
-				resp, _, apiErr := req.Execute()
+				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
-					return nil, apiErr
+					return nil, httpResp, apiErr
 				}
-				return resp, nil
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
+				}
+				return resp.Data, httpResp, nil
 			})
 	}
 }
 
-func dhcpScopeListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpScopeListInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpScopeListInput) (*mcp.CallToolResult, any, error) {
-		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
-		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
+func dhcpScopeListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpScopeListInput) (*mcp.CallToolResult, DhcpScopeListOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpScopeListInput) (*mcp.CallToolResult, DhcpScopeListOut, error) {
+		opts := ListOptions(in)
 		return commonListHandler(ctx, opts, logger, "solidserver_dhcp_scope_list",
-			func(c context.Context, where string, limit, offset int32) (any, error) {
+			func(c context.Context, where string, limit, offset int32) ([]sdsclient.DataInnerDhcpScopeData, *http.Response, error) {
 				authCtx := client.AuthContext(c)
 				req := client.DhcpAPI.DhcpScopeList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
-				resp, _, apiErr := req.Execute()
+				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
-					return nil, apiErr
+					return nil, httpResp, apiErr
 				}
-				return resp, nil
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
+				}
+				return resp.Data, httpResp, nil
 			})
 	}
 }
 
-func dhcpRangeListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpRangeListInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpRangeListInput) (*mcp.CallToolResult, any, error) {
-		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
-		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
+func dhcpRangeListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpRangeListInput) (*mcp.CallToolResult, DhcpRangeListOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpRangeListInput) (*mcp.CallToolResult, DhcpRangeListOut, error) {
+		opts := ListOptions(in)
 		return commonListHandler(ctx, opts, logger, "solidserver_dhcp_range_list",
-			func(c context.Context, where string, limit, offset int32) (any, error) {
+			func(c context.Context, where string, limit, offset int32) ([]sdsclient.DataInnerDhcpRangeData, *http.Response, error) {
 				authCtx := client.AuthContext(c)
 				req := client.DhcpAPI.DhcpRangeList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
-				resp, _, apiErr := req.Execute()
+				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
-					return nil, apiErr
+					return nil, httpResp, apiErr
 				}
-				return resp, nil
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
+				}
+				return resp.Data, httpResp, nil
 			})
 	}
 }
 
-func dhcpLeaseListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpLeaseListInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpLeaseListInput) (*mcp.CallToolResult, any, error) {
-		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
-		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
+func dhcpLeaseListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpLeaseListInput) (*mcp.CallToolResult, DhcpLeaseListOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpLeaseListInput) (*mcp.CallToolResult, DhcpLeaseListOut, error) {
+		opts := ListOptions(in)
 		return commonListHandler(ctx, opts, logger, "solidserver_dhcp_lease_list",
-			func(c context.Context, where string, limit, offset int32) (any, error) {
+			func(c context.Context, where string, limit, offset int32) ([]sdsclient.DataInnerDhcpLeaseData, *http.Response, error) {
 				authCtx := client.AuthContext(c)
 				req := client.DhcpAPI.DhcpLeaseList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
-				resp, _, apiErr := req.Execute()
+				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
-					return nil, apiErr
+					return nil, httpResp, apiErr
 				}
-				return resp, nil
+				if resp == nil || resp.Data == nil {
+					return nil, httpResp, nil
+				}
+				return resp.Data, httpResp, nil
 			})
 	}
 }
 
-func dhcpStaticAddHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpStaticAddInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpStaticAddInput) (*mcp.CallToolResult, any, error) {
+func dhcpStaticAddHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpStaticAddInput) (*mcp.CallToolResult, DhcpStaticAddOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpStaticAddInput) (*mcp.CallToolResult, DhcpStaticAddOut, error) {
+		emptyOut := DhcpStaticAddOut{Data: make([]sdsclient.DataInnerDhcpStaticAddSuccess, 0)}
+
 		if err := ValidateRequiredString(in.Server, "server"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateRequiredString(in.Name, "name"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateIP(in.IP, "ip"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateDHCPMAC(in.MAC, "mac"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		logger.Info("adding static DHCP reservation", "name", in.Name, "ip", in.IP, "mac", in.MAC, "server", in.Server)
@@ -223,24 +248,33 @@ func dhcpStaticAddHandler(client *services.APIClientWrapper, logger *slog.Logger
 
 		authCtx := client.AuthContext(ctx)
 		req := client.DhcpAPI.DhcpStaticAdd(authCtx).DhcpStaticAddInput(input)
-		resp, _, err := req.Execute()
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
 		if err != nil {
-			r, a := errorResult("SolidServer API error: %v", err)
-			return r, a, nil
+			logger.Error("API error", "tool", "solidserver_dhcp_static_add", "error", err)
+			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
-		r, a := jsonResult(resp)
-		return r, a, nil
+		var data []sdsclient.DataInnerDhcpStaticAddSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerDhcpStaticAddSuccess, 0)
+		}
+		out := DhcpStaticAddOut{Data: data}
+		return jsonResult(out), out, nil
 	}
 }
 
-func dhcpStaticDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpStaticDeleteInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpStaticDeleteInput) (*mcp.CallToolResult, any, error) {
+func dhcpStaticDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpStaticDeleteInput) (*mcp.CallToolResult, DhcpStaticDeleteOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpStaticDeleteInput) (*mcp.CallToolResult, DhcpStaticDeleteOut, error) {
+		emptyOut := DhcpStaticDeleteOut{Data: make([]sdsclient.DataInnerDhcpStaticDeleteSuccess, 0)}
+
 		if err := ValidateRequiredString(in.Server, "server"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateIP(in.IP, "ip"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult(err, emptyOut)
 		}
 
 		logger.Info("deleting static DHCP reservation", "ip", in.IP, "server", in.Server)
@@ -249,13 +283,20 @@ func dhcpStaticDeleteHandler(client *services.APIClientWrapper, logger *slog.Log
 			ServerName(in.Server).
 			StaticAddr(in.IP)
 
-		resp, _, err := req.Execute()
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
 		if err != nil {
-			r, a := errorResult("SolidServer API error: %v", err)
-			return r, a, nil
+			logger.Error("API error", "tool", "solidserver_dhcp_static_delete", "error", err)
+			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
-		r, a := jsonResult(resp)
-		return r, a, nil
+		var data []sdsclient.DataInnerDhcpStaticDeleteSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerDhcpStaticDeleteSuccess, 0)
+		}
+		out := DhcpStaticDeleteOut{Data: data}
+		return jsonResult(out), out, nil
 	}
 }
