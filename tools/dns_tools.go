@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"log/slog"
+	"net/http"
 
 	"github.com/efficientip-labs/solidserver-go-client/sdsclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -39,6 +40,18 @@ type DNSZoneListInput struct {
 	Limit  int32  `json:"limit,omitempty" jsonschema:"Maximum number of results (default 50)."`
 	Offset int32  `json:"offset,omitempty" jsonschema:"Offset for pagination."`
 }
+
+// DNS Output Structs
+type DNSRecordCreateOut struct {
+	Data []sdsclient.DataInnerDnsRrAddSuccess `json:"data" jsonschema:"Created DNS record response."`
+}
+
+type DNSRecordDeleteOut struct {
+	Data []sdsclient.DataInnerDnsRrDeleteSuccess `json:"data" jsonschema:"Deleted DNS record response."`
+}
+
+type DNSRecordListOut = ListOutput[sdsclient.DataInnerDnsRrData]
+type DNSZoneListOut = ListOutput[sdsclient.DataInnerDnsZoneData]
 
 // RegisterDNSTools registers DNS management tools.
 func RegisterDNSTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
@@ -90,23 +103,39 @@ func RegisterDNSTools(s *mcp.Server, client *services.APIClientWrapper, logger *
 	}, dnsZoneListHandler(client, logger))
 }
 
-func dnsRecordCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSRecordCreateInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordCreateInput) (*mcp.CallToolResult, any, error) {
-		if err := ValidateRequiredString(in.Zone, "zone"); err != nil {
-			return validationErrorResult(err)
-		}
-		if err := ValidateRequiredString(in.Name, "name"); err != nil {
-			return validationErrorResult(err)
-		}
-		rrType, err := ValidateDNSRecordType(in.Type)
+func validateDNSRecordCreateInput(in *DNSRecordCreateInput) (string, error) {
+	if err := ValidateRequiredString(in.Zone, "zone"); err != nil {
+		return "", err
+	}
+	if err := ValidateRequiredString(in.Name, "name"); err != nil {
+		return "", err
+	}
+	rrType, err := ValidateDNSRecordType(in.Type)
+	if err != nil {
+		return "", err
+	}
+	if err := ValidateDNSRecordValue(rrType, in.Value); err != nil {
+		return "", err
+	}
+	if err := ValidateTTL(in.TTL); err != nil {
+		return "", err
+	}
+	if err := ValidateOptionalString(in.Server, "server"); err != nil {
+		return "", err
+	}
+	if err := ValidateOptionalString(in.View, "view"); err != nil {
+		return "", err
+	}
+	return rrType, nil
+}
+
+func dnsRecordCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSRecordCreateInput) (*mcp.CallToolResult, DNSRecordCreateOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordCreateInput) (*mcp.CallToolResult, DNSRecordCreateOut, error) {
+		emptyOut := DNSRecordCreateOut{Data: make([]sdsclient.DataInnerDnsRrAddSuccess, 0)}
+
+		rrType, err := validateDNSRecordCreateInput(&in)
 		if err != nil {
-			return validationErrorResult(err)
-		}
-		if err := ValidateDNSRecordValue(rrType, in.Value); err != nil {
-			return validationErrorResult(err)
-		}
-		if err := ValidateTTL(in.TTL); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult[DNSRecordCreateOut](err)
 		}
 		in.Type = rrType
 
@@ -129,28 +158,42 @@ func dnsRecordCreateHandler(client *services.APIClientWrapper, logger *slog.Logg
 
 		authCtx := client.AuthContext(ctx)
 		req := client.DnsAPI.DnsRrAdd(authCtx).DnsRrAddInput(input)
-		resp, _, err := req.Execute()
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
 		if err != nil {
-			r, a := errorResult("SolidServer API error: %v", err)
-			return r, a, nil
+			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
-		r, a := jsonResult(resp)
-		return r, a, nil
+		var data []sdsclient.DataInnerDnsRrAddSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerDnsRrAddSuccess, 0)
+		}
+		out := DNSRecordCreateOut{Data: data}
+		return jsonResult(out), out, nil
 	}
 }
 
-func dnsRecordDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSRecordDeleteInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordDeleteInput) (*mcp.CallToolResult, any, error) {
+func dnsRecordDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSRecordDeleteInput) (*mcp.CallToolResult, DNSRecordDeleteOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordDeleteInput) (*mcp.CallToolResult, DNSRecordDeleteOut, error) {
+		emptyOut := DNSRecordDeleteOut{Data: make([]sdsclient.DataInnerDnsRrDeleteSuccess, 0)}
+
 		if err := ValidateRequiredString(in.Zone, "zone"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult[DNSRecordDeleteOut](err)
 		}
 		if err := ValidateRequiredString(in.Name, "name"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult[DNSRecordDeleteOut](err)
 		}
 		rrType, err := ValidateDNSRecordType(in.Type)
 		if err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult[DNSRecordDeleteOut](err)
+		}
+		if err := ValidateOptionalString(in.Server, "server"); err != nil {
+			return validationErrorResult[DNSRecordDeleteOut](err)
+		}
+		if err := ValidateOptionalString(in.View, "view"); err != nil {
+			return validationErrorResult[DNSRecordDeleteOut](err)
 		}
 		in.Type = rrType
 
@@ -168,54 +211,58 @@ func dnsRecordDeleteHandler(client *services.APIClientWrapper, logger *slog.Logg
 			req = req.ViewName(in.View)
 		}
 
-		resp, _, err := req.Execute()
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
 		if err != nil {
-			r, a := errorResult("SolidServer API error: %v", err)
-			return r, a, nil
+			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
-		r, a := jsonResult(resp)
-		return r, a, nil
+		var data []sdsclient.DataInnerDnsRrDeleteSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerDnsRrDeleteSuccess, 0)
+		}
+		out := DNSRecordDeleteOut{Data: data}
+		return jsonResult(out), out, nil
 	}
 }
 
-func dnsRecordListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSRecordListInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordListInput) (*mcp.CallToolResult, any, error) {
-		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
-		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
+func dnsRecordListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSRecordListInput) (*mcp.CallToolResult, DNSRecordListOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordListInput) (*mcp.CallToolResult, DNSRecordListOut, error) {
+		opts := ListOptions(in)
 		return commonListHandler(ctx, opts, logger, "solidserver_dns_record_list",
-			func(c context.Context, where string, limit, offset int32) (any, error) {
+			func(c context.Context, where string, limit, offset int32) ([]sdsclient.DataInnerDnsRrData, *http.Response, error) {
 				authCtx := client.AuthContext(c)
 				req := client.DnsAPI.DnsRrList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
-				resp, _, apiErr := req.Execute()
+				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
-					return nil, apiErr
+					return nil, httpResp, apiErr
 				}
-				return resp, nil
+				return resp.Data, httpResp, nil
 			})
 	}
 }
 
 //nolint:dupl // similar list logic across modules
-func dnsZoneListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSZoneListInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSZoneListInput) (*mcp.CallToolResult, any, error) {
-		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
-		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
+func dnsZoneListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSZoneListInput) (*mcp.CallToolResult, DNSZoneListOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSZoneListInput) (*mcp.CallToolResult, DNSZoneListOut, error) {
+		opts := ListOptions(in)
 		return commonListHandler(ctx, opts, logger, "solidserver_dns_zone_list",
-			func(c context.Context, where string, limit, offset int32) (any, error) {
+			func(c context.Context, where string, limit, offset int32) ([]sdsclient.DataInnerDnsZoneData, *http.Response, error) {
 				authCtx := client.AuthContext(c)
 				req := client.DnsAPI.DnsZoneList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
-				resp, _, apiErr := req.Execute()
+				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
-					return nil, apiErr
+					return nil, httpResp, apiErr
 				}
-				return resp, nil
+				return resp.Data, httpResp, nil
 			})
 	}
 }

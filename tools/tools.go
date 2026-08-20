@@ -3,9 +3,12 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net/http"
 
+	"github.com/efficientip-labs/solidserver-go-client/sdsclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/tphakala/solidserver-mcp/services"
 )
@@ -59,22 +62,8 @@ func RegisterAll(s *mcp.Server, client *services.APIClientWrapper, logger *slog.
 	RegisterDhcpTools(s, client, logger)
 }
 
-// textResult builds a simple text content result.
-//
-//nolint:unparam // anyVal is always nil; kept for signature consistency with jsonResult and errorResult.
-func textResult(format string, args ...any) (res *mcp.CallToolResult, anyVal any) {
-	text := fmt.Sprintf(format, args...)
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{
-				Text: text,
-			},
-		},
-	}, nil
-}
-
-// jsonResult builds a JSON-formatted text content result.
-func jsonResult(data any) (res *mcp.CallToolResult, anyVal any) {
+// jsonResult builds a JSON-formatted text content result from structured output data.
+func jsonResult(data any) *mcp.CallToolResult {
 	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return errorResult("failed to marshal JSON: %v", err)
@@ -85,11 +74,11 @@ func jsonResult(data any) (res *mcp.CallToolResult, anyVal any) {
 				Text: string(b),
 			},
 		},
-	}, data
+	}
 }
 
 // errorResult builds an error result with IsError: true.
-func errorResult(format string, args ...any) (res *mcp.CallToolResult, anyVal any) {
+func errorResult(format string, args ...any) *mcp.CallToolResult {
 	text := fmt.Sprintf(format, args...)
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
@@ -98,42 +87,123 @@ func errorResult(format string, args ...any) (res *mcp.CallToolResult, anyVal an
 			},
 		},
 		IsError: true,
-	}, nil
+	}
 }
 
-// validationErrorResult builds a tool error result for validation failures.
-func validationErrorResult(err error) (*mcp.CallToolResult, any, error) {
-	res, anyVal := errorResult("invalid parameter: %v", err)
-	return res, anyVal, nil
+// validationErrorResult builds a tool error result for client-side validation failures.
+//
+//nolint:unparam // Signature must match MCP tool handler return pattern (*mcp.CallToolResult, Out, error)
+func validationErrorResult[T any](err error) (*mcp.CallToolResult, T, error) {
+	var zero T
+	return errorResult("invalid parameter: %v", err), zero, nil
+}
+
+type sdsErrorPayload struct {
+	Errno  string `json:"errno"`
+	Errmsg string `json:"errmsg"`
+}
+
+// formatAPIError parses errors from the SolidServer API client, extracting HTTP status,
+// appliance errno, and errmsg where available, and includes actionable remediation hints.
+func formatAPIError(err error, httpResp *http.Response) string {
+	if err == nil {
+		return ""
+	}
+
+	var status int
+	if httpResp != nil {
+		status = httpResp.StatusCode
+	}
+
+	var errno, errmsg string
+	if openAPIErr, ok := errors.AsType[*sdsclient.GenericOpenAPIError](err); ok {
+		body := openAPIErr.Body()
+		if len(body) > 0 {
+			var payload sdsErrorPayload
+			if jsonErr := json.Unmarshal(body, &payload); jsonErr == nil {
+				errno = payload.Errno
+				errmsg = payload.Errmsg
+			}
+		}
+	}
+
+	var hint string
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		hint = " (check API token credentials and permissions)"
+	case http.StatusNotFound:
+		hint = " (verify target space, zone, or resource exists)"
+	case http.StatusConflict:
+		hint = " (resource already exists or conflicts with existing state)"
+	case http.StatusTooManyRequests:
+		hint = " (rate limit exceeded; back off and retry)"
+	case http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable:
+		hint = " (SOLIDserver appliance error)"
+	}
+
+	if errno != "" || errmsg != "" {
+		if status != 0 {
+			return fmt.Sprintf("SolidServer API error (status %d, errno %s): %s%s", status, errno, errmsg, hint)
+		}
+		return fmt.Sprintf("SolidServer API error (errno %s): %s%s", errno, errmsg, hint)
+	}
+
+	if status != 0 {
+		return fmt.Sprintf("SolidServer API error (status %d): %v%s", status, err, hint)
+	}
+
+	return fmt.Sprintf("SolidServer API error: %v", err)
 }
 
 // ListOptions defines common parameters for list tools.
 type ListOptions struct {
-	Where  string `json:"where,omitempty"`
-	Limit  int32  `json:"limit,omitempty"`
-	Offset int32  `json:"offset,omitempty"`
+	Where  string `json:"where,omitempty" jsonschema:"SQL-like where clause for filtering."`
+	Limit  int32  `json:"limit,omitempty" jsonschema:"Maximum number of results (default 50)."`
+	Offset int32  `json:"offset,omitempty" jsonschema:"Offset for pagination."`
 }
 
-// CommonListRequester is a function type that executes a list request.
-type CommonListRequester func(ctx context.Context, where string, limit, offset int32) (any, error)
+// ListOutput is the standardized typed output wrapper for all list tools.
+type ListOutput[T any] struct {
+	Data   []T   `json:"data" jsonschema:"Array of resource records matching the query."`
+	Count  int   `json:"count" jsonschema:"Number of records returned in this page."`
+	Limit  int32 `json:"limit" jsonschema:"Requested page size limit."`
+	Offset int32 `json:"offset" jsonschema:"Requested pagination offset."`
+}
 
-// commonListHandler provides a generic way to handle list requests.
-func commonListHandler(
+// closeBody safely closes an HTTP response body if present.
+func closeBody(httpResp *http.Response) {
+	if httpResp != nil && httpResp.Body != nil {
+		_ = httpResp.Body.Close()
+	}
+}
+
+// CommonListRequester is a function type that executes a list request against the SDK.
+type CommonListRequester[T any] func(ctx context.Context, where string, limit, offset int32) ([]T, *http.Response, error)
+
+// commonListHandler provides a generic way to handle list requests with typed outputs.
+//
+//nolint:unparam // Signature must match MCP tool handler return pattern (*mcp.CallToolResult, Out, error)
+func commonListHandler[T any](
 	ctx context.Context,
 	opts ListOptions,
 	logger *slog.Logger,
 	toolName string,
-	execute CommonListRequester,
-) (*mcp.CallToolResult, any, error) {
+	execute CommonListRequester[T],
+) (*mcp.CallToolResult, ListOutput[T], error) {
+	emptyOut := ListOutput[T]{
+		Data:   make([]T, 0),
+		Count:  0,
+		Limit:  opts.Limit,
+		Offset: opts.Offset,
+	}
+
 	if err := ValidateWhereClause(opts.Where); err != nil {
-		logger.Error("invalid where clause", "tool", toolName, "error", err)
-		res, anyVal := errorResult("invalid where clause: %v", err)
-		return res, anyVal, nil
+		logger.Warn("invalid where clause", "tool", toolName, "error", err)
+		return errorResult("invalid where clause: %v", err), emptyOut, nil
 	}
 
 	if opts.Offset < 0 {
-		res, anyVal := errorResult("offset must be non-negative, got %d", opts.Offset)
-		return res, anyVal, nil
+		return errorResult("offset must be non-negative, got %d", opts.Offset), emptyOut, nil
 	}
 
 	limit := opts.Limit
@@ -142,14 +212,23 @@ func commonListHandler(
 	}
 
 	logger.Debug("executing list tool", "tool", toolName, "where", opts.Where, "limit", limit, "offset", opts.Offset)
-	resp, err := execute(ctx, opts.Where, limit, opts.Offset)
+	items, httpResp, err := execute(ctx, opts.Where, limit, opts.Offset)
+	closeBody(httpResp)
 	if err != nil {
 		logger.Error("API error", "tool", toolName, "error", err)
-		res, anyVal := errorResult("SolidServer API error: %v", err)
-		return res, anyVal, nil
+		return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 	}
 
-	logger.Debug("tool success", "tool", toolName)
-	res, anyVal := jsonResult(resp)
-	return res, anyVal, nil
+	if items == nil {
+		items = make([]T, 0)
+	}
+
+	logger.Debug("tool success", "tool", toolName, "count", len(items))
+	out := ListOutput[T]{
+		Data:   items,
+		Count:  len(items),
+		Limit:  limit,
+		Offset: opts.Offset,
+	}
+	return jsonResult(out), out, nil
 }

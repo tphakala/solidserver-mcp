@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 
 	"github.com/efficientip-labs/solidserver-go-client/sdsclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -39,6 +40,23 @@ type SubnetDeleteInput struct {
 	Space   string `json:"space" jsonschema:"The name of the space."`
 	Address string `json:"address" jsonschema:"The start IP address of the subnet to delete."`
 }
+
+// Subnet Output Structs
+type SubnetListOut = ListOutput[sdsclient.DataInnerIpamNetworkData]
+
+type SubnetInfoOut struct {
+	Data []sdsclient.DataInnerIpamNetworkData `json:"data" jsonschema:"Subnet detail records including usage."`
+}
+
+type SubnetCreateOut struct {
+	Data []sdsclient.DataInnerIpamNetworkAddSuccess `json:"data" jsonschema:"Created subnet records."`
+}
+
+type SubnetDeleteOut struct {
+	Data []sdsclient.DataInnerIpamNetworkDeleteSuccess `json:"data" jsonschema:"Deleted subnet response records."`
+}
+
+type SpaceListOut = ListOutput[sdsclient.DataInnerIpamSpaceData]
 
 // RegisterSubnetTools registers subnet and space management tools.
 func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
@@ -99,16 +117,15 @@ func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper, logge
 }
 
 //nolint:dupl // similar list logic across modules
-func subnetListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetListInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetListInput) (*mcp.CallToolResult, any, error) {
+func subnetListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetListInput) (*mcp.CallToolResult, SubnetListOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetListInput) (*mcp.CallToolResult, SubnetListOut, error) {
 		if err := ValidateRequiredString(in.Space, "space"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult[SubnetListOut](err)
 		}
 
-		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
 		return commonListHandler(ctx, opts, logger, "solidserver_subnet_list",
-			func(c context.Context, where string, limit, offset int32) (any, error) {
+			func(c context.Context, where string, limit, offset int32) ([]sdsclient.DataInnerIpamNetworkData, *http.Response, error) {
 				w := fmt.Sprintf("site_name='%s'", EscapeWhereValue(in.Space))
 				if where != "" {
 					w = fmt.Sprintf("(%s) AND (%s)", w, where)
@@ -118,45 +135,55 @@ func subnetListHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 					Where(w).
 					Limit(limit).
 					Offset(offset)
-				resp, _, apiErr := req.Execute()
+				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
-					return nil, apiErr
+					return nil, httpResp, apiErr
 				}
-				return resp, nil
+				return resp.Data, httpResp, nil
 			})
 	}
 }
 
-func subnetInfoHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetInfoInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetInfoInput) (*mcp.CallToolResult, any, error) {
+func subnetInfoHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetInfoInput) (*mcp.CallToolResult, SubnetInfoOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetInfoInput) (*mcp.CallToolResult, SubnetInfoOut, error) {
+		emptyOut := SubnetInfoOut{Data: make([]sdsclient.DataInnerIpamNetworkData, 0)}
+
 		if err := ValidatePositiveInt32(in.ID, "id"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult[SubnetInfoOut](err)
 		}
 
 		logger.Debug("getting subnet info", "id", in.ID)
 		authCtx := client.AuthContext(ctx)
 		req := client.IpamAPI.IpamNetworkInfo(authCtx).NetworkId(in.ID)
-		resp, _, err := req.Execute()
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
 		if err != nil {
-			r, a := errorResult("SolidServer API error: %v", err)
-			return r, a, nil
+			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
-		r, a := jsonResult(resp)
-		return r, a, nil
+		var data []sdsclient.DataInnerIpamNetworkData
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerIpamNetworkData, 0)
+		}
+		out := SubnetInfoOut{Data: data}
+		return jsonResult(out), out, nil
 	}
 }
 
-func subnetCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetCreateInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetCreateInput) (*mcp.CallToolResult, any, error) {
+func subnetCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetCreateInput) (*mcp.CallToolResult, SubnetCreateOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetCreateInput) (*mcp.CallToolResult, SubnetCreateOut, error) {
+		emptyOut := SubnetCreateOut{Data: make([]sdsclient.DataInnerIpamNetworkAddSuccess, 0)}
+
 		if err := ValidateRequiredString(in.Space, "space"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult[SubnetCreateOut](err)
 		}
 		if err := ValidateRequiredString(in.Name, "name"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult[SubnetCreateOut](err)
 		}
 		if err := ValidateSubnetPrefix(in.Address, in.Prefix); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult[SubnetCreateOut](err)
 		}
 
 		logger.Info("creating subnet", "name", in.Name, "address", in.Address, "prefix", in.Prefix, "space", in.Space)
@@ -169,24 +196,32 @@ func subnetCreateHandler(client *services.APIClientWrapper, logger *slog.Logger)
 
 		authCtx := client.AuthContext(ctx)
 		req := client.IpamAPI.IpamNetworkAdd(authCtx).IpamNetworkAddInput(input)
-		resp, _, err := req.Execute()
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
 		if err != nil {
-			r, a := errorResult("SolidServer API error: %v", err)
-			return r, a, nil
+			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
-		r, a := jsonResult(resp)
-		return r, a, nil
+		var data []sdsclient.DataInnerIpamNetworkAddSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerIpamNetworkAddSuccess, 0)
+		}
+		out := SubnetCreateOut{Data: data}
+		return jsonResult(out), out, nil
 	}
 }
 
-func subnetDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetDeleteInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetDeleteInput) (*mcp.CallToolResult, any, error) {
+func subnetDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetDeleteInput) (*mcp.CallToolResult, SubnetDeleteOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetDeleteInput) (*mcp.CallToolResult, SubnetDeleteOut, error) {
+		emptyOut := SubnetDeleteOut{Data: make([]sdsclient.DataInnerIpamNetworkDeleteSuccess, 0)}
+
 		if err := ValidateRequiredString(in.Space, "space"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult[SubnetDeleteOut](err)
 		}
 		if err := ValidateIP(in.Address, "address"); err != nil {
-			return validationErrorResult(err)
+			return validationErrorResult[SubnetDeleteOut](err)
 		}
 
 		logger.Info("deleting subnet", "address", in.Address, "space", in.Space)
@@ -195,34 +230,39 @@ func subnetDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger)
 			SpaceName(in.Space).
 			NetworkAddr(in.Address)
 
-		resp, _, err := req.Execute()
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
 		if err != nil {
-			r, a := errorResult("SolidServer API error: %v", err)
-			return r, a, nil
+			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
 		}
 
-		r, a := jsonResult(resp)
-		return r, a, nil
+		var data []sdsclient.DataInnerIpamNetworkDeleteSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerIpamNetworkDeleteSuccess, 0)
+		}
+		out := SubnetDeleteOut{Data: data}
+		return jsonResult(out), out, nil
 	}
 }
 
 //nolint:dupl // similar list logic across modules
-func spaceListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SpaceListInput) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, request *mcp.CallToolRequest, in SpaceListInput) (*mcp.CallToolResult, any, error) {
-		//nolint:staticcheck // Identical underlying types but conversion is tricky here.
-		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
+func spaceListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SpaceListInput) (*mcp.CallToolResult, SpaceListOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in SpaceListInput) (*mcp.CallToolResult, SpaceListOut, error) {
+		opts := ListOptions(in)
 		return commonListHandler(ctx, opts, logger, "solidserver_space_list",
-			func(c context.Context, where string, limit, offset int32) (any, error) {
+			func(c context.Context, where string, limit, offset int32) ([]sdsclient.DataInnerIpamSpaceData, *http.Response, error) {
 				authCtx := client.AuthContext(c)
 				req := client.IpamAPI.IpamSpaceList(authCtx).Limit(limit).Offset(offset)
 				if where != "" {
 					req = req.Where(where)
 				}
-				resp, _, apiErr := req.Execute()
+				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
-					return nil, apiErr
+					return nil, httpResp, apiErr
 				}
-				return resp, nil
+				return resp.Data, httpResp, nil
 			})
 	}
 }

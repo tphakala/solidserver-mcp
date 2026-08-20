@@ -285,3 +285,26 @@ func TestToolInputSchemasDocumentEveryParameter(t *testing.T) {
 		})
 	}
 }
+
+// TestToolOutputSchemasDocumentEveryTool verifies that every registered tool
+// declares an output schema with structured properties.
+func TestToolOutputSchemasDocumentEveryTool(t *testing.T) {
+	for _, tool := range listRegisteredTools(t) {
+		t.Run(tool.Name, func(t *testing.T) {
+			if tool.OutputSchema == nil {
+				t.Fatalf("tool %q has no OutputSchema declared", tool.Name)
+			}
+			schema, ok := tool.OutputSchema.(map[string]any)
+			if !ok {
+				t.Fatalf("tool %q output schema has unexpected type %T", tool.Name, tool.OutputSchema)
+			}
+			props, ok := schema["properties"].(map[string]any)
+			if !ok || len(props) == 0 {
+				t.Fatalf("tool %q output schema has no properties", tool.Name)
+			}
+			if _, ok := props["data"]; !ok {
+				t.Errorf("tool %q output schema missing 'data' property", tool.Name)
+			}
+		})
+	}
+}
