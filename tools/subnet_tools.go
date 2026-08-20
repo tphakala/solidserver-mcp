@@ -59,7 +59,7 @@ type SubnetDeleteOut struct {
 type SpaceListOut = ListOutput[sdsclient.DataInnerIpamSpaceData]
 
 // RegisterSubnetTools registers subnet and space management tools.
-func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
+func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_subnet_list",
 		Title:       "List subnets",
@@ -91,7 +91,7 @@ func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper, logge
 			"solidserver_subnet_list first, since an overlap is rejected rather than merged. Changes " +
 			"appliance state and is undone only by solidserver_subnet_delete. Returns the created " +
 			"subnet as JSON.",
-	}, subnetCreateHandler(client, logger))
+	}, subnetCreateHandler(client, logger, g))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_subnet_delete",
@@ -102,7 +102,7 @@ func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper, logge
 			"check what is allocated with solidserver_ip_list before calling it. Deleting a subnet " +
 			"that is still in use loses the record of which hosts held which addresses. Returns a " +
 			"confirmation message.",
-	}, subnetDeleteHandler(client, logger))
+	}, subnetDeleteHandler(client, logger, g))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_space_list",
@@ -120,19 +120,23 @@ func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper, logge
 func subnetListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetListInput) (*mcp.CallToolResult, SubnetListOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetListInput) (*mcp.CallToolResult, SubnetListOut, error) {
 		emptyOut := SubnetListOut{Data: make([]sdsclient.DataInnerIpamNetworkData, 0)}
-		if err := ValidateRequiredString(in.Space, "space"); err != nil {
+		if err := ValidateOptionalString(in.Space, "space"); err != nil {
 			return validationErrorResult(err, emptyOut)
 		}
 
 		opts := ListOptions{Where: in.Where, Limit: in.Limit, Offset: in.Offset}
 		return commonListHandler(ctx, opts, logger, "solidserver_subnet_list",
 			func(c context.Context, where string, limit, offset int32) ([]sdsclient.DataInnerIpamNetworkData, *http.Response, error) {
-				w := CombineWhereClause(fmt.Sprintf("site_name='%s'", EscapeWhereValue(in.Space)), where)
+				fixed := ""
+				if in.Space != "" {
+					fixed = fmt.Sprintf("site_name='%s'", EscapeWhereValue(in.Space))
+				}
+				w := CombineWhereClause(fixed, where)
 				authCtx := client.AuthContext(c)
-				req := client.IpamAPI.IpamNetworkList(authCtx).
-					Where(w).
-					Limit(limit).
-					Offset(offset)
+				req := client.IpamAPI.IpamNetworkList(authCtx).Limit(limit).Offset(offset)
+				if w != "" {
+					req = req.Where(w)
+				}
 				resp, httpResp, apiErr := req.Execute()
 				if apiErr != nil {
 					return nil, httpResp, apiErr
@@ -153,7 +157,7 @@ func subnetInfoHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 			return validationErrorResult(err, emptyOut)
 		}
 
-		logger.Debug("getting subnet info", "id", in.ID)
+		logger.Info("fetching subnet details", "subnet_id", in.ID)
 		authCtx := client.AuthContext(ctx)
 		req := client.IpamAPI.IpamNetworkInfo(authCtx).NetworkId(in.ID)
 		resp, httpResp, err := req.Execute()
@@ -174,17 +178,39 @@ func subnetInfoHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 	}
 }
 
-func subnetCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetCreateInput) (*mcp.CallToolResult, SubnetCreateOut, error) {
+func checkSubnetCreateGuardrails(g *Guardrails, in *SubnetCreateInput) error {
+	if err := g.CheckReadOnly(); err != nil {
+		return err
+	}
+	if err := g.CheckProtectedSpace(in.Space); err != nil {
+		return err
+	}
+	if in.Address != "" && in.Prefix != "" {
+		cidr := in.Address + "/" + in.Prefix
+		return g.CheckProtectedSubnet(cidr)
+	}
+	return g.CheckProtectedSubnet(in.Address)
+}
+
+func validateSubnetCreateInput(in *SubnetCreateInput) error {
+	if err := ValidateRequiredString(in.Space, "space"); err != nil {
+		return err
+	}
+	if err := ValidateRequiredString(in.Name, "name"); err != nil {
+		return err
+	}
+	return ValidateSubnetPrefix(in.Address, in.Prefix)
+}
+
+func subnetCreateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, SubnetCreateInput) (*mcp.CallToolResult, SubnetCreateOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetCreateInput) (*mcp.CallToolResult, SubnetCreateOut, error) {
 		emptyOut := SubnetCreateOut{Data: make([]sdsclient.DataInnerIpamNetworkAddSuccess, 0)}
 
-		if err := ValidateRequiredString(in.Space, "space"); err != nil {
-			return validationErrorResult(err, emptyOut)
+		if err := checkSubnetCreateGuardrails(g, &in); err != nil {
+			return errorResult("%v", err), emptyOut, nil
 		}
-		if err := ValidateRequiredString(in.Name, "name"); err != nil {
-			return validationErrorResult(err, emptyOut)
-		}
-		if err := ValidateSubnetPrefix(in.Address, in.Prefix); err != nil {
+
+		if err := validateSubnetCreateInput(&in); err != nil {
 			return validationErrorResult(err, emptyOut)
 		}
 
@@ -216,9 +242,19 @@ func subnetCreateHandler(client *services.APIClientWrapper, logger *slog.Logger)
 	}
 }
 
-func subnetDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetDeleteInput) (*mcp.CallToolResult, SubnetDeleteOut, error) {
+func subnetDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, SubnetDeleteInput) (*mcp.CallToolResult, SubnetDeleteOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetDeleteInput) (*mcp.CallToolResult, SubnetDeleteOut, error) {
 		emptyOut := SubnetDeleteOut{Data: make([]sdsclient.DataInnerIpamNetworkDeleteSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := g.CheckProtectedSpace(in.Space); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := g.CheckProtectedSubnet(in.Address); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
 
 		if err := ValidateRequiredString(in.Space, "space"); err != nil {
 			return validationErrorResult(err, emptyOut)

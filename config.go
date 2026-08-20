@@ -2,123 +2,252 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 )
 
-// Environment variables read by LoadConfig.
-const (
-	envHost        = "SOLIDSERVER_HOST"
-	envTokenID     = "SOLIDSERVER_TOKEN_ID"
-	envTokenSecret = "SOLIDSERVER_TOKEN_SECRET"
-	envSSLVerify   = "SOLIDSERVER_SSL_VERIFY"
-	envTransport   = "MCP_TRANSPORT"
-	envHTTPHost    = "MCP_HTTP_HOST"
-	envHTTPPort    = "MCP_HTTP_PORT"
-	envLogLevel    = "LOG_LEVEL"
-)
-
-// Supported values for Config.Transport.
 const (
 	TransportStdio = "stdio"
 	TransportHTTP  = "http"
-)
 
-// Supported values for Config.LogLevel.
-const (
 	LogLevelDebug = "debug"
 	LogLevelInfo  = "info"
 	LogLevelWarn  = "warn"
 	LogLevelError = "error"
+
+	defaultHTTPHost    = "127.0.0.1"
+	defaultHTTPPort    = 8080
+	defaultHTTPTimeout = 30 * time.Second
+	defaultMaxRetries  = 3
+	maxPort            = 65535
 )
 
-// Defaults applied when the corresponding environment variable is unset.
 const (
-	defaultHTTPHost = "localhost"
-	defaultHTTPPort = 8080
+	envHost             = "SOLIDSERVER_HOST"
+	envTokenID          = "SOLIDSERVER_TOKEN_ID"
+	envTokenIDFile      = "SOLIDSERVER_TOKEN_ID_FILE"
+	envTokenSecret      = "SOLIDSERVER_TOKEN_SECRET"
+	envTokenSecretFile  = "SOLIDSERVER_TOKEN_SECRET_FILE"
+	envSSLVerify        = "SOLIDSERVER_SSL_VERIFY"
+	envReadOnly         = "SOLIDSERVER_READ_ONLY"
+	envProtectedSpaces  = "SOLIDSERVER_PROTECTED_SPACES"
+	envProtectedZones   = "SOLIDSERVER_PROTECTED_ZONES"
+	envProtectedSubnets = "SOLIDSERVER_PROTECTED_SUBNETS"
+	envHTTPTimeout      = "SOLIDSERVER_HTTP_TIMEOUT"
+	envMaxRetries       = "SOLIDSERVER_MAX_RETRIES"
+	envRateLimit        = "SOLIDSERVER_RATE_LIMIT"
+	envLogRedactPII     = "SOLIDSERVER_LOG_REDACT_PII"
+	envTransport        = "SOLIDSERVER_TRANSPORT"
+	envLogLevel         = "SOLIDSERVER_LOG_LEVEL"
+	envHTTPHost         = "SOLIDSERVER_HTTP_HOST"
+	envHTTPPort         = "SOLIDSERVER_HTTP_PORT"
 )
 
-// maxPort is the highest valid TCP port number.
-const maxPort = 65535
-
-// Config holds the configuration for the SolidServer MCP server.
+// Config holds all server configuration loaded from environment variables and secret files.
 type Config struct {
-	Host        string
-	TokenID     string
-	TokenSecret string
-	SSLVerify   bool
-	Transport   string // TransportStdio or TransportHTTP
-	HTTPPort    int
-	HTTPHost    string
-	LogLevel    string // LogLevelDebug, LogLevelInfo, LogLevelWarn or LogLevelError
+	Host             string
+	TokenID          string
+	TokenSecret      string
+	SSLVerify        bool
+	ReadOnly         bool
+	ProtectedSpaces  []string
+	ProtectedZones   []string
+	ProtectedSubnets []string
+	HTTPTimeout      time.Duration
+	MaxRetries       int
+	RateLimit        float64
+	LogRedactPII     bool
+	Transport        string
+	LogLevel         string
+	HTTPHost         string
+	HTTPPort         int
 }
 
-// LoadConfig reads configuration from environment variables.
+func readSecret(envVar, fileVar string) (string, error) {
+	if filePath := os.Getenv(fileVar); filePath != "" {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return "", fmt.Errorf("reading %s from %q: %w", fileVar, filePath, err)
+		}
+		secret := strings.TrimSpace(string(data))
+		if secret == "" {
+			return "", fmt.Errorf("secret file %s %q is empty", fileVar, filePath)
+		}
+		return secret, nil
+	}
+	return os.Getenv(envVar), nil
+}
+
+func parseCommaList(val string) []string {
+	if val == "" {
+		return []string{}
+	}
+	parts := strings.Split(val, ",")
+	res := make([]string, 0, len(parts))
+	for _, p := range parts {
+		trimmed := strings.TrimSpace(p)
+		if trimmed != "" {
+			res = append(res, trimmed)
+		}
+	}
+	return res
+}
+
+func parseTransport(t string) (string, error) {
+	switch t {
+	case "":
+		return TransportStdio, nil
+	case TransportStdio, TransportHTTP:
+		return t, nil
+	default:
+		return "", fmt.Errorf("invalid %s %q: expected %q or %q", envTransport, t, TransportStdio, TransportHTTP)
+	}
+}
+
+func parseLogLevel(l string) (string, error) {
+	switch l {
+	case "":
+		return LogLevelInfo, nil
+	case LogLevelDebug, LogLevelInfo, LogLevelWarn, LogLevelError:
+		return l, nil
+	default:
+		return "", fmt.Errorf("invalid %s %q: expected %q, %q, %q or %q",
+			envLogLevel, l, LogLevelDebug, LogLevelInfo, LogLevelWarn, LogLevelError)
+	}
+}
+
+func parseBools(cfg *Config) error {
+	cfg.SSLVerify = true
+	if sslVerifyStr := os.Getenv(envSSLVerify); sslVerifyStr != "" {
+		verify, err := strconv.ParseBool(sslVerifyStr)
+		if err != nil {
+			return fmt.Errorf("invalid %s %q: expected a boolean", envSSLVerify, sslVerifyStr)
+		}
+		cfg.SSLVerify = verify
+	}
+
+	if readOnlyStr := os.Getenv(envReadOnly); readOnlyStr != "" {
+		ro, err := strconv.ParseBool(readOnlyStr)
+		if err != nil {
+			return fmt.Errorf("invalid %s %q: expected a boolean", envReadOnly, readOnlyStr)
+		}
+		cfg.ReadOnly = ro
+	}
+
+	if redactStr := os.Getenv(envLogRedactPII); redactStr != "" {
+		redact, err := strconv.ParseBool(redactStr)
+		if err != nil {
+			return fmt.Errorf("invalid %s %q: expected a boolean", envLogRedactPII, redactStr)
+		}
+		cfg.LogRedactPII = redact
+	}
+	return nil
+}
+
+func parseResilience(cfg *Config) error {
+	cfg.HTTPTimeout = defaultHTTPTimeout
+	if timeoutStr := os.Getenv(envHTTPTimeout); timeoutStr != "" {
+		dur, err := time.ParseDuration(timeoutStr)
+		if err != nil || dur <= 0 {
+			return fmt.Errorf("invalid %s %q: expected a positive duration (e.g. 30s, 1m)", envHTTPTimeout, timeoutStr)
+		}
+		cfg.HTTPTimeout = dur
+	}
+
+	cfg.MaxRetries = defaultMaxRetries
+	if retriesStr := os.Getenv(envMaxRetries); retriesStr != "" {
+		retries, err := strconv.Atoi(retriesStr)
+		if err != nil || retries < 0 {
+			return fmt.Errorf("invalid %s %q: expected a non-negative integer", envMaxRetries, retriesStr)
+		}
+		cfg.MaxRetries = retries
+	}
+
+	if rateLimitStr := os.Getenv(envRateLimit); rateLimitStr != "" {
+		rl, err := strconv.ParseFloat(rateLimitStr, 64)
+		if err != nil || rl < 0 || math.IsNaN(rl) || math.IsInf(rl, 0) {
+			return fmt.Errorf("invalid %s %q: expected a non-negative number", envRateLimit, rateLimitStr)
+		}
+		cfg.RateLimit = rl
+	}
+	return nil
+}
+
+func parseHTTPPort(cfg *Config) error {
+	cfg.HTTPPort = defaultHTTPPort
+	if portStr := os.Getenv(envHTTPPort); portStr != "" {
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			return fmt.Errorf("invalid %s %q: expected an integer", envHTTPPort, portStr)
+		}
+		if port < 1 || port > maxPort {
+			return fmt.Errorf("invalid %s %d: expected 1-%d", envHTTPPort, port, maxPort)
+		}
+		cfg.HTTPPort = port
+	}
+	return nil
+}
+
+// LoadConfig reads configuration from environment variables and secret files.
 func LoadConfig() (Config, error) {
+	tokenID, err := readSecret(envTokenID, envTokenIDFile)
+	if err != nil {
+		return Config{}, err
+	}
+
+	tokenSecret, err := readSecret(envTokenSecret, envTokenSecretFile)
+	if err != nil {
+		return Config{}, err
+	}
+
+	transport, err := parseTransport(os.Getenv(envTransport))
+	if err != nil {
+		return Config{}, err
+	}
+
+	logLevel, err := parseLogLevel(os.Getenv(envLogLevel))
+	if err != nil {
+		return Config{}, err
+	}
+
+	httpHost := os.Getenv(envHTTPHost)
+	if httpHost == "" {
+		httpHost = defaultHTTPHost
+	}
+
 	cfg := Config{
-		Host:        os.Getenv(envHost),
-		TokenID:     os.Getenv(envTokenID),
-		TokenSecret: os.Getenv(envTokenSecret),
-		Transport:   os.Getenv(envTransport),
-		LogLevel:    os.Getenv(envLogLevel),
-		HTTPHost:    os.Getenv(envHTTPHost),
+		Host:             os.Getenv(envHost),
+		TokenID:          tokenID,
+		TokenSecret:      tokenSecret,
+		ProtectedSpaces:  parseCommaList(os.Getenv(envProtectedSpaces)),
+		ProtectedZones:   parseCommaList(os.Getenv(envProtectedZones)),
+		ProtectedSubnets: parseCommaList(os.Getenv(envProtectedSubnets)),
+		Transport:        transport,
+		LogLevel:         logLevel,
+		HTTPHost:         httpHost,
 	}
 
 	if cfg.Host == "" {
 		return Config{}, fmt.Errorf("%s environment variable is required", envHost)
 	}
 	if cfg.TokenID == "" {
-		return Config{}, fmt.Errorf("%s environment variable is required", envTokenID)
+		return Config{}, fmt.Errorf("%s or %s environment variable is required", envTokenID, envTokenIDFile)
 	}
 	if cfg.TokenSecret == "" {
-		return Config{}, fmt.Errorf("%s environment variable is required", envTokenSecret)
+		return Config{}, fmt.Errorf("%s or %s environment variable is required", envTokenSecret, envTokenSecretFile)
 	}
 
-	switch cfg.Transport {
-	case "":
-		cfg.Transport = TransportStdio
-	case TransportStdio, TransportHTTP:
-		// valid
-	default:
-		return Config{}, fmt.Errorf("invalid %s %q: expected %q or %q", envTransport, cfg.Transport, TransportStdio, TransportHTTP)
+	if err := parseBools(&cfg); err != nil {
+		return Config{}, err
 	}
-
-	switch cfg.LogLevel {
-	case "":
-		cfg.LogLevel = LogLevelInfo
-	case LogLevelDebug, LogLevelInfo, LogLevelWarn, LogLevelError:
-		// valid
-	default:
-		return Config{}, fmt.Errorf("invalid %s %q: expected %q, %q, %q or %q",
-			envLogLevel, cfg.LogLevel, LogLevelDebug, LogLevelInfo, LogLevelWarn, LogLevelError)
+	if err := parseResilience(&cfg); err != nil {
+		return Config{}, err
 	}
-
-	if cfg.HTTPHost == "" {
-		cfg.HTTPHost = defaultHTTPHost
-	}
-
-	// Default to verifying TLS certificates. A malformed value is rejected
-	// rather than silently falling back, so a typo cannot be mistaken for a
-	// deliberate opt-out of verification.
-	cfg.SSLVerify = true
-	if sslVerifyStr := os.Getenv(envSSLVerify); sslVerifyStr != "" {
-		verify, err := strconv.ParseBool(sslVerifyStr)
-		if err != nil {
-			return Config{}, fmt.Errorf("invalid %s %q: expected a boolean", envSSLVerify, sslVerifyStr)
-		}
-		cfg.SSLVerify = verify
-	}
-
-	cfg.HTTPPort = defaultHTTPPort
-	if portStr := os.Getenv(envHTTPPort); portStr != "" {
-		port, err := strconv.Atoi(portStr)
-		if err != nil {
-			return Config{}, fmt.Errorf("invalid %s %q: expected an integer", envHTTPPort, portStr)
-		}
-		if port < 1 || port > maxPort {
-			return Config{}, fmt.Errorf("invalid %s %d: expected 1-%d", envHTTPPort, port, maxPort)
-		}
-		cfg.HTTPPort = port
+	if err := parseHTTPPort(&cfg); err != nil {
+		return Config{}, err
 	}
 
 	return cfg, nil

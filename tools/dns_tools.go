@@ -12,32 +12,32 @@ import (
 
 // DNS Input Structs
 type DNSRecordCreateInput struct {
-	Zone   string `json:"zone" jsonschema:"The name of the DNS zone."`
-	Name   string `json:"name" jsonschema:"The name of the record (relative to zone)."`
-	Type   string `json:"type" jsonschema:"The type of record (e.g., 'A', 'AAAA', 'CNAME')."`
-	Value  string `json:"value" jsonschema:"The value of the record (e.g., IP address or target FQDN)."`
-	TTL    int32  `json:"ttl,omitempty" jsonschema:"Time to live (seconds, default 3600)."`
-	Server string `json:"server,omitempty" jsonschema:"The DNS server name (optional)."`
-	View   string `json:"view,omitempty" jsonschema:"The DNS view name (optional)."`
+	Zone   string `json:"zone" jsonschema:"DNS zone name where the record will be created."`
+	Name   string `json:"name" jsonschema:"Record name (e.g. 'host' or 'host.example.com')."`
+	Type   string `json:"type" jsonschema:"DNS record type (e.g. 'A', 'AAAA', 'CNAME', 'PTR', 'TXT', 'MX', 'SRV', 'CAA')."`
+	Value  string `json:"value" jsonschema:"Record value/target (e.g. '192.168.1.10' for A, 'target.example.com' for CNAME)."`
+	TTL    int32  `json:"ttl,omitempty" jsonschema:"Time-to-live in seconds (optional)."`
+	Server string `json:"server,omitempty" jsonschema:"DNS server name (optional, if required by your SolidServer setup)."`
+	View   string `json:"view,omitempty" jsonschema:"DNS view name (optional, defaults to default view)."`
 }
 
 type DNSRecordDeleteInput struct {
-	Zone   string `json:"zone" jsonschema:"The name of the DNS zone."`
-	Name   string `json:"name" jsonschema:"The name of the record."`
-	Type   string `json:"type" jsonschema:"The type of record."`
-	Server string `json:"server,omitempty" jsonschema:"The DNS server name (optional)."`
-	View   string `json:"view,omitempty" jsonschema:"The DNS view name (optional)."`
+	Zone   string `json:"zone" jsonschema:"DNS zone name."`
+	Name   string `json:"name" jsonschema:"Record name to delete."`
+	Type   string `json:"type" jsonschema:"DNS record type (e.g. 'A', 'CNAME')."`
+	Server string `json:"server,omitempty" jsonschema:"DNS server name (optional)."`
+	View   string `json:"view,omitempty" jsonschema:"DNS view name (optional)."`
 }
 
 type DNSRecordListInput struct {
-	Where  string `json:"where,omitempty" jsonschema:"SQL-like where clause for filtering (e.g., \"rr_name LIKE 'web%'\")."`
-	Limit  int32  `json:"limit,omitempty" jsonschema:"Maximum number of results (default 50)."`
+	Where  string `json:"where,omitempty" jsonschema:"SQL-like filter expression (e.g. \"zone_name='example.com' and rr_type='A'\")."`
+	Limit  int32  `json:"limit,omitempty" jsonschema:"Max number of records to return (default 50)."`
 	Offset int32  `json:"offset,omitempty" jsonschema:"Offset for pagination."`
 }
 
 type DNSZoneListInput struct {
-	Where  string `json:"where,omitempty" jsonschema:"SQL-like where clause for filtering."`
-	Limit  int32  `json:"limit,omitempty" jsonschema:"Maximum number of results (default 50)."`
+	Where  string `json:"where,omitempty" jsonschema:"SQL-like filter expression (e.g. \"zone_name like '%.example.com'\")."`
+	Limit  int32  `json:"limit,omitempty" jsonschema:"Max number of zones to return (default 50)."`
 	Offset int32  `json:"offset,omitempty" jsonschema:"Offset for pagination."`
 }
 
@@ -54,7 +54,7 @@ type DNSRecordListOut = ListOutput[sdsclient.DataInnerDnsRrData]
 type DNSZoneListOut = ListOutput[sdsclient.DataInnerDnsZoneData]
 
 // RegisterDNSTools registers DNS management tools.
-func RegisterDNSTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
+func RegisterDNSTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dns_record_create",
 		Title:       "Create a DNS record",
@@ -66,7 +66,7 @@ func RegisterDNSTools(s *mcp.Server, client *services.APIClientWrapper, logger *
 			"name may already resolve. Publishing a record changes what resolvers hand out, and " +
 			"clients may cache the answer for the record's TTL after it is later removed. Returns " +
 			"the created record as JSON.",
-	}, dnsRecordCreateHandler(client, logger))
+	}, dnsRecordCreateHandler(client, logger, g))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dns_record_delete",
@@ -78,7 +78,7 @@ func RegisterDNSTools(s *mcp.Server, client *services.APIClientWrapper, logger *
 			"wrong one takes a live name out of service. Resolvers may keep serving the old answer " +
 			"until its TTL expires, so the effect is not immediate everywhere. Returns a " +
 			"confirmation message.",
-	}, dnsRecordDeleteHandler(client, logger))
+	}, dnsRecordDeleteHandler(client, logger, g))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dns_record_list",
@@ -129,9 +129,36 @@ func validateDNSRecordCreateInput(in *DNSRecordCreateInput) (string, error) {
 	return rrType, nil
 }
 
-func dnsRecordCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSRecordCreateInput) (*mcp.CallToolResult, DNSRecordCreateOut, error) {
+func validateDNSRecordDeleteInput(in *DNSRecordDeleteInput) (string, error) {
+	if err := ValidateRequiredString(in.Zone, "zone"); err != nil {
+		return "", err
+	}
+	if err := ValidateRequiredString(in.Name, "name"); err != nil {
+		return "", err
+	}
+	rrType, err := ValidateDNSRecordType(in.Type)
+	if err != nil {
+		return "", err
+	}
+	if err := ValidateOptionalString(in.Server, "server"); err != nil {
+		return "", err
+	}
+	if err := ValidateOptionalString(in.View, "view"); err != nil {
+		return "", err
+	}
+	return rrType, nil
+}
+
+func dnsRecordCreateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, DNSRecordCreateInput) (*mcp.CallToolResult, DNSRecordCreateOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordCreateInput) (*mcp.CallToolResult, DNSRecordCreateOut, error) {
 		emptyOut := DNSRecordCreateOut{Data: make([]sdsclient.DataInnerDnsRrAddSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := g.CheckProtectedZone(in.Zone); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
 
 		rrType, err := validateDNSRecordCreateInput(&in)
 		if err != nil {
@@ -176,24 +203,19 @@ func dnsRecordCreateHandler(client *services.APIClientWrapper, logger *slog.Logg
 	}
 }
 
-func dnsRecordDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DNSRecordDeleteInput) (*mcp.CallToolResult, DNSRecordDeleteOut, error) {
+func dnsRecordDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, DNSRecordDeleteInput) (*mcp.CallToolResult, DNSRecordDeleteOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordDeleteInput) (*mcp.CallToolResult, DNSRecordDeleteOut, error) {
 		emptyOut := DNSRecordDeleteOut{Data: make([]sdsclient.DataInnerDnsRrDeleteSuccess, 0)}
 
-		if err := ValidateRequiredString(in.Zone, "zone"); err != nil {
-			return validationErrorResult(err, emptyOut)
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
 		}
-		if err := ValidateRequiredString(in.Name, "name"); err != nil {
-			return validationErrorResult(err, emptyOut)
+		if err := g.CheckProtectedZone(in.Zone); err != nil {
+			return errorResult("%v", err), emptyOut, nil
 		}
-		rrType, err := ValidateDNSRecordType(in.Type)
+
+		rrType, err := validateDNSRecordDeleteInput(&in)
 		if err != nil {
-			return validationErrorResult(err, emptyOut)
-		}
-		if err := ValidateOptionalString(in.Server, "server"); err != nil {
-			return validationErrorResult(err, emptyOut)
-		}
-		if err := ValidateOptionalString(in.View, "view"); err != nil {
 			return validationErrorResult(err, emptyOut)
 		}
 		in.Type = rrType

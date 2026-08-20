@@ -62,7 +62,7 @@ type DhcpStaticDeleteOut struct {
 }
 
 // RegisterDhcpTools registers DHCP management tools.
-func RegisterDhcpTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
+func RegisterDhcpTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dhcp_server_list",
 		Title:       "List DHCP servers",
@@ -116,7 +116,7 @@ func RegisterDhcpTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 			"solidserver_dhcp_range_list will show you, since reserving one inside the pool can " +
 			"collide with a lease already issued to another client. Changes appliance state and is " +
 			"undone only by solidserver_dhcp_static_delete. Returns the created reservation as JSON.",
-	}, dhcpStaticAddHandler(client, logger))
+	}, dhcpStaticAddHandler(client, logger, g))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dhcp_static_delete",
@@ -130,7 +130,7 @@ func RegisterDhcpTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 			"the reservation you mean with solidserver_dhcp_lease_list first; this delete matches on " +
 			"the address alone and does not verify which MAC the reservation belonged to. Returns a " +
 			"confirmation message.",
-	}, dhcpStaticDeleteHandler(client, logger))
+	}, dhcpStaticDeleteHandler(client, logger, g))
 }
 
 func dhcpServerListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpServerListInput) (*mcp.CallToolResult, DhcpServerListOut, error) {
@@ -221,9 +221,16 @@ func dhcpLeaseListHandler(client *services.APIClientWrapper, logger *slog.Logger
 	}
 }
 
-func dhcpStaticAddHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpStaticAddInput) (*mcp.CallToolResult, DhcpStaticAddOut, error) {
+func dhcpStaticAddHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, DhcpStaticAddInput) (*mcp.CallToolResult, DhcpStaticAddOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpStaticAddInput) (*mcp.CallToolResult, DhcpStaticAddOut, error) {
 		emptyOut := DhcpStaticAddOut{Data: make([]sdsclient.DataInnerDhcpStaticAddSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := g.CheckProtectedSubnet(in.IP); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
 
 		if err := ValidateRequiredString(in.Server, "server"); err != nil {
 			return validationErrorResult(err, emptyOut)
@@ -266,9 +273,16 @@ func dhcpStaticAddHandler(client *services.APIClientWrapper, logger *slog.Logger
 	}
 }
 
-func dhcpStaticDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpStaticDeleteInput) (*mcp.CallToolResult, DhcpStaticDeleteOut, error) {
+func dhcpStaticDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, DhcpStaticDeleteInput) (*mcp.CallToolResult, DhcpStaticDeleteOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpStaticDeleteInput) (*mcp.CallToolResult, DhcpStaticDeleteOut, error) {
 		emptyOut := DhcpStaticDeleteOut{Data: make([]sdsclient.DataInnerDhcpStaticDeleteSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := g.CheckProtectedSubnet(in.IP); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
 
 		if err := ValidateRequiredString(in.Server, "server"); err != nil {
 			return validationErrorResult(err, emptyOut)

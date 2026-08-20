@@ -19,7 +19,7 @@ func newTestMux(t *testing.T) *http.ServeMux {
 		t.Fatalf("NewSolidServerClient: %v", err)
 	}
 
-	return newHTTPMux(client, slog.New(slog.DiscardHandler))
+	return newHTTPMux(client, slog.New(slog.DiscardHandler), nil)
 }
 
 // TestMCPEndpointRejectsCrossOriginPost guards the CSRF protection on /mcp.
@@ -125,4 +125,52 @@ func TestHealthEndpoint(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
 		t.Errorf("GET /health: got Content-Type %q, want %q", ct, "application/json")
 	}
+	if body := rec.Body.String(); !strings.Contains(body, `"status":"ok"`) {
+		t.Errorf("GET /health: expected status ok in body %q", body)
+	}
+}
+
+// TestReadyEndpoint verifies the /ready probe behavior.
+func TestReadyEndpoint(t *testing.T) {
+	t.Run("ready endpoint with failing upstream", func(t *testing.T) {
+		mux := newTestMux(t)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ready", http.NoBody)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		// With invalid host "solidserver.invalid", upstream probe will fail with 503
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("GET /ready: got status %d, want %d", rec.Code, http.StatusServiceUnavailable)
+		}
+		if body := rec.Body.String(); !strings.Contains(body, `"status":"unavailable"`) {
+			t.Errorf("GET /ready: expected unavailable status in body %q", body)
+		}
+	})
+
+	t.Run("ready endpoint with healthy mock upstream", func(t *testing.T) {
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":[]}`))
+		}))
+		defer server.Close()
+
+		host := strings.TrimPrefix(server.URL, "https://")
+		client, err := services.NewSolidServerClient(host, "id", "secret", false)
+		if err != nil {
+			t.Fatalf("NewSolidServerClient: %v", err)
+		}
+
+		mux := newHTTPMux(client, slog.New(slog.DiscardHandler), nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ready", http.NoBody)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /ready: got status %d, want %d (body: %s)", rec.Code, http.StatusOK, rec.Body.String())
+		}
+		if body := rec.Body.String(); !strings.Contains(body, `"status":"ready"`) {
+			t.Errorf("GET /ready: expected ready status in body %q", body)
+		}
+	})
 }

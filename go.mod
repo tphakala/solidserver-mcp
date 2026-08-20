@@ -6,6 +6,7 @@ require (
 	github.com/efficientip-labs/solidserver-go-client v1.8.4-3
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/quasilyte/go-ruleguard/dsl v0.3.23
+	golang.org/x/time v0.15.0
 )
 
 require (
@@ -17,5 +18,4 @@ require (
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/time v0.15.0 // indirect
 )

@@ -52,7 +52,7 @@ type IPFindFreeOut = ListOutput[sdsclient.DataInnerIpamAddressData]
 type IPListOut = ListOutput[sdsclient.DataInnerIpamAddressData]
 
 // RegisterIPAMTools registers IP management tools.
-func RegisterIPAMTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger) {
+func RegisterIPAMTools(s *mcp.Server, client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_ip_create",
 		Title:       "Allocate an IP address",
@@ -64,7 +64,7 @@ func RegisterIPAMTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 			"reserves nothing. Two callers racing for the next free address can be handed different " +
 			"ones, so do not assume a prior find_free result is still free. Changes appliance state " +
 			"and is released only by solidserver_ip_delete. Returns the allocated address as JSON.",
-	}, ipCreateHandler(client, logger))
+	}, ipCreateHandler(client, logger, g))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_ip_delete",
@@ -76,30 +76,66 @@ func RegisterIPAMTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 			"address is the one you mean with solidserver_ip_list first, since releasing an address " +
 			"still configured on a live host invites a duplicate-address conflict later. Returns a " +
 			"confirmation message.",
-	}, ipDeleteHandler(client, logger))
+	}, ipDeleteHandler(client, logger, g))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_ip_find_free",
-		Title:       "Find free IP addresses",
-		Annotations: readOnlyTool("Find free IP addresses"),
-		Description: "Returns addresses currently free in a subnet without reserving any of them. " +
-			"Use this to plan an allocation or to report available capacity; use " +
-			"solidserver_ip_create when you actually want to claim one. The result is a snapshot " +
-			"with no hold on it, so an address listed here can be taken by someone else before you " +
-			"allocate it. Use solidserver_ip_list instead to see addresses already in use. Returns " +
-			"the free addresses as JSON.",
+		Title:       "Find the next available IP address",
+		Annotations: readOnlyTool("Find the next available IP address"),
+		Description: "Finds the first available unallocated address in a subnet without modifying " +
+			"appliance state. Use this to inspect what is free before allocating with " +
+			"solidserver_ip_create, or when deciding whether a subnet has enough capacity left for " +
+			"new hosts. Use solidserver_ip_list instead when you need to see the addresses already " +
+			"taken. Returns the free address as JSON.",
 	}, ipFindFreeHandler(client, logger))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_ip_list",
-		Title:       "List allocated IP addresses",
-		Annotations: readOnlyTool("List allocated IP addresses"),
-		Description: "Enumerates addresses already recorded in a space or subnet, optionally " +
-			"narrowed by a where clause. Use this to find which host holds an address, to confirm an " +
-			"allocation before calling solidserver_ip_delete, or to audit usage. Use " +
-			"solidserver_ip_find_free instead to see what is still available: this tool reports what " +
-			"is taken, not what is free. Returns the matching address records as JSON.",
+		Title:       "List IP addresses",
+		Annotations: readOnlyTool("List IP addresses"),
+		Description: "Enumerates IP address allocations, optionally scoped to a space or narrowed " +
+			"by a where clause. Use this to find which host holds a given address, to audit " +
+			"allocations in a subnet, or to verify an address exists before calling " +
+			"solidserver_ip_delete. Use solidserver_ip_find_free instead to look for unallocated " +
+			"addresses. Returns the matching address records as JSON.",
 	}, ipListHandler(client, logger))
+}
+
+func checkIPCreateGuardrails(g *Guardrails, space, subnet, hostaddr string) error {
+	if err := g.CheckReadOnly(); err != nil {
+		return err
+	}
+	if err := g.CheckProtectedSpace(space); err != nil {
+		return err
+	}
+	if hostaddr != "" {
+		if err := g.CheckProtectedSubnet(hostaddr); err != nil {
+			return err
+		}
+	}
+	return g.CheckProtectedSubnet(subnet)
+}
+
+func buildIPAddressAddInput(ctx context.Context, client *services.APIClientWrapper, in *IPCreateInput, logger *slog.Logger) (sdsclient.IpamAddressAddInput, error) {
+	input := sdsclient.IpamAddressAddInput{
+		SpaceName: &in.Space,
+	}
+	if in.Hostaddr != "" {
+		input.AddressHostaddr = &in.Hostaddr
+	} else {
+		freeIP, err := findFirstFreeIP(ctx, client, in.Space, in.Subnet, logger)
+		if err != nil {
+			return input, err
+		}
+		input.AddressHostaddr = freeIP
+	}
+	if in.Name != "" {
+		input.AddressName = &in.Name
+	}
+	if in.Mac != "" {
+		input.AddressMacAddr = &in.Mac
+	}
+	return input, nil
 }
 
 func validateIPCreateInput(in *IPCreateInput) error {
@@ -119,68 +155,62 @@ func validateIPCreateInput(in *IPCreateInput) error {
 			return err
 		}
 	}
-	if err := ValidateOptionalString(in.Name, "name"); err != nil {
-		return err
+	if in.Name != "" {
+		if err := ValidateOptionalString(in.Name, "name"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-func findFirstFreeIP(ctx context.Context, client *services.APIClientWrapper, space, subnet string, logger *slog.Logger) (freeIP *string, res *mcp.CallToolResult) {
+func findFirstFreeIP(ctx context.Context, client *services.APIClientWrapper, space, subnet string, logger *slog.Logger) (*string, error) {
+	authCtx := client.AuthContext(ctx)
 	where := fmt.Sprintf("parent_subnet_addr='%s' AND is_free='1' AND space_name='%s'",
 		EscapeWhereValue(subnet), EscapeWhereValue(space))
 	logger.Debug("searching for free IP", "subnet", subnet, "space", space)
-	authCtx := client.AuthContext(ctx)
 	listReq := client.IpamAPI.IpamAddressList(authCtx).Where(where).Limit(1)
 	listResp, httpResp, apiErr := listReq.Execute()
 	closeBody(httpResp)
 	if apiErr != nil {
-		return nil, errorResult("failed to find free IP in subnet %s: %s", subnet, formatAPIError(apiErr, httpResp))
+		return nil, fmt.Errorf("finding free IP in subnet %s: %s", subnet, formatAPIError(apiErr, httpResp))
 	}
-
 	if listResp == nil || len(listResp.Data) == 0 {
-		return nil, errorResult("no free IP found in subnet: %s", subnet)
+		return nil, fmt.Errorf("no free IP found in subnet: %s", subnet)
 	}
 
 	firstFree := listResp.Data[0].AddressHostaddr
 	if firstFree == nil {
-		return nil, errorResult("found IP entry in subnet %s but it has no address", subnet)
+		return nil, fmt.Errorf("found IP entry in subnet %s but it has no address", subnet)
 	}
 	logger.Debug("found free IP", "ip", *firstFree)
 	return firstFree, nil
 }
 
-func ipCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, IPCreateInput) (*mcp.CallToolResult, IPCreateOut, error) {
+func ipCreateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, IPCreateInput) (*mcp.CallToolResult, IPCreateOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPCreateInput) (*mcp.CallToolResult, IPCreateOut, error) {
 		emptyOut := IPCreateOut{Data: make([]sdsclient.DataInnerIpamAddressAddSuccess, 0)}
+
+		if err := checkIPCreateGuardrails(g, in.Space, in.Subnet, in.Hostaddr); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
 
 		if err := validateIPCreateInput(&in); err != nil {
 			return validationErrorResult(err, emptyOut)
 		}
 
-		input := sdsclient.IpamAddressAddInput{
-			SpaceName: &in.Space,
+		input, err := buildIPAddressAddInput(ctx, client, &in, logger)
+		if err != nil {
+			return errorResult("%v", err), emptyOut, nil
 		}
 
-		authCtx := client.AuthContext(ctx)
-
-		if in.Hostaddr != "" {
-			input.AddressHostaddr = &in.Hostaddr
-		} else {
-			freeIP, res := findFirstFreeIP(ctx, client, in.Space, in.Subnet, logger)
-			if res != nil {
-				return res, emptyOut, nil
+		if input.AddressHostaddr != nil {
+			if err := g.CheckProtectedSubnet(*input.AddressHostaddr); err != nil {
+				return errorResult("%v", err), emptyOut, nil
 			}
-			input.AddressHostaddr = freeIP
-		}
-
-		if in.Name != "" {
-			input.AddressName = &in.Name
-		}
-		if in.Mac != "" {
-			input.AddressMacAddr = &in.Mac
 		}
 
 		logger.Info("creating IP address", "ip", *input.AddressHostaddr, "space", in.Space)
+		authCtx := client.AuthContext(ctx)
 		req := client.IpamAPI.IpamAddressAdd(authCtx).IpamAddressAddInput(input)
 		resp, httpResp, err := req.Execute()
 		closeBody(httpResp)
@@ -200,9 +230,19 @@ func ipCreateHandler(client *services.APIClientWrapper, logger *slog.Logger) fun
 	}
 }
 
-func ipDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, IPDeleteInput) (*mcp.CallToolResult, IPDeleteOut, error) {
+func ipDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, IPDeleteInput) (*mcp.CallToolResult, IPDeleteOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPDeleteInput) (*mcp.CallToolResult, IPDeleteOut, error) {
 		emptyOut := IPDeleteOut{Data: make([]sdsclient.DataInnerIpamAddressDeleteSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := g.CheckProtectedSpace(in.Space); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := g.CheckProtectedSubnet(in.IPAddress); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
 
 		if err := ValidateRequiredString(in.Space, "space"); err != nil {
 			return validationErrorResult(err, emptyOut)
