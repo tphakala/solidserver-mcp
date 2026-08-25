@@ -121,7 +121,7 @@ func vlanDomainListHandler(client *services.APIClientWrapper, logger *slog.Logge
 
 func vlanListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanListInput) (*mcp.CallToolResult, VlanListOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanListInput) (*mcp.CallToolResult, VlanListOut, error) {
-		emptyOut := VlanListOut{Data: make([]sdsclient.DataInnerVlanVlanData, 0)}
+		emptyOut := VlanListOut{Data: make([]sdsclient.DataInnerVlanVlanData, 0), Limit: clampLimit(in.Limit), Offset: in.Offset}
 		if err := ValidateOptionalString(in.Domain, "domain"); err != nil {
 			return validationErrorResult(err, emptyOut)
 		}

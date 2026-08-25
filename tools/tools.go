@@ -112,19 +112,44 @@ func fenceUntrusted(body string) string {
 	return untrustedNote + untrustedOpen + "\n" + body + "\n" + untrustedClose
 }
 
-// jsonResult builds a JSON-formatted text content result from structured output data.
-func jsonResult(data any) *mcp.CallToolResult {
+// fencedJSONText marshals data to indented JSON and wraps it in the
+// untrusted-data fence. It is the single place the "MarshalIndent then
+// fenceUntrusted" sequence lives, so both tool results (via fencedJSONResult)
+// and MCP resource contents render appliance data through the same fence. It
+// returns the marshal error to the caller rather than masking it.
+func fencedJSONText(data any) (string, error) {
 	b, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
-		return errorResult("failed to marshal JSON: %v", err)
+		return "", err
+	}
+	return fenceUntrusted(string(b)), nil
+}
+
+// fencedJSONResult builds a tool result whose single TextContent is data
+// rendered as fenced JSON, setting IsError when isError is true. It is the one
+// builder both jsonResult and apiErrorResult delegate to, so the
+// fence-exactly-once invariant and the marshal-failure fallback are defined in
+// exactly one place. On the (today unreachable) marshal failure it fences a
+// generic message and forces IsError, keeping every path fenced by construction.
+func fencedJSONResult(data any, isError bool) *mcp.CallToolResult {
+	text, err := fencedJSONText(data)
+	if err != nil {
+		text = fenceUntrusted(fmt.Sprintf("failed to marshal JSON: %v", err))
+		isError = true
 	}
 	return &mcp.CallToolResult{
 		Content: []mcp.Content{
 			&mcp.TextContent{
-				Text: fenceUntrusted(string(b)),
+				Text: text,
 			},
 		},
+		IsError: isError,
 	}
+}
+
+// jsonResult builds a JSON-formatted text content result from structured output data.
+func jsonResult(data any) *mcp.CallToolResult {
+	return fencedJSONResult(data, false)
 }
 
 // errorResult builds an error result with IsError: true. Its text is our own
@@ -256,26 +281,11 @@ func formatAPIError(err error, httpResp *http.Response) string {
 // apiErrorResult builds a tool error result carrying the structured APIError as
 // JSON. The appliance errmsg is attacker-controllable, so the JSON is fenced as
 // untrusted data. The Message field still carries the full human string with
-// its hint, so consumers matching on prose keep working.
+// its hint, so consumers matching on prose keep working. Both the success and
+// the unreachable marshal-failure paths fence through fencedJSONResult.
 func apiErrorResult(err error, httpResp *http.Response) *mcp.CallToolResult {
 	details := apiErrorDetails(err, httpResp)
-	b, marshalErr := json.MarshalIndent(details, "", "  ")
-	if marshalErr != nil {
-		// Unreachable today (APIError is scalar-only), but keep the fence
-		// invariant true by construction: details.Message embeds appliance errmsg.
-		return &mcp.CallToolResult{
-			Content: []mcp.Content{&mcp.TextContent{Text: fenceUntrusted(details.Message)}},
-			IsError: true,
-		}
-	}
-	return &mcp.CallToolResult{
-		Content: []mcp.Content{
-			&mcp.TextContent{
-				Text: fenceUntrusted(string(b)),
-			},
-		},
-		IsError: true,
-	}
+	return fencedJSONResult(details, true)
 }
 
 // ListOptions defines common parameters for list tools.
@@ -313,6 +323,21 @@ func closeBody(httpResp *http.Response) {
 // CommonListRequester is a function type that executes a list request against the SDK.
 type CommonListRequester[T any] func(ctx context.Context, where string, limit, offset int32) ([]T, *http.Response, error)
 
+// clampLimit applies the effective page-size bounds: a non-positive requested
+// limit becomes defaultListLimit and one above maxListLimit is capped there.
+// commonListHandler and the list handlers' early parameter-validation error
+// paths share it, so every empty page reports the same effective Limit that the
+// Limit jsonschema documents.
+func clampLimit(limit int32) int32 {
+	if limit <= 0 {
+		return defaultListLimit
+	}
+	if limit > maxListLimit {
+		return maxListLimit
+	}
+	return limit
+}
+
 // commonListHandler provides a generic way to handle list requests with typed outputs.
 //
 //nolint:unparam // Signature must match MCP tool handler return pattern (*mcp.CallToolResult, Out, error)
@@ -323,10 +348,16 @@ func commonListHandler[T any](
 	toolName string,
 	execute CommonListRequester[T],
 ) (*mcp.CallToolResult, ListOutput[T], error) {
+	limit := clampLimit(opts.Limit)
+
+	// emptyOut carries the clamped (effective) limit so it matches the Limit
+	// jsonschema on every return path, including the validation-error,
+	// negative-offset, and API-error paths below. Offset stays as requested,
+	// which its own schema documents.
 	emptyOut := ListOutput[T]{
 		Data:   make([]T, 0),
 		Count:  0,
-		Limit:  opts.Limit,
+		Limit:  limit,
 		Offset: opts.Offset,
 	}
 
@@ -337,13 +368,6 @@ func commonListHandler[T any](
 
 	if opts.Offset < 0 {
 		return errorResult("offset must be non-negative, got %d", opts.Offset), emptyOut, nil
-	}
-
-	limit := opts.Limit
-	if limit <= 0 {
-		limit = defaultListLimit
-	} else if limit > maxListLimit {
-		limit = maxListLimit
 	}
 
 	logger.Debug("executing list tool", "tool", toolName, "where", opts.Where, "limit", limit, "offset", opts.Offset)

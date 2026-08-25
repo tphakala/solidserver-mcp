@@ -119,7 +119,7 @@ func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper, logge
 //nolint:dupl // similar list logic across modules
 func subnetListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, SubnetListInput) (*mcp.CallToolResult, SubnetListOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetListInput) (*mcp.CallToolResult, SubnetListOut, error) {
-		emptyOut := SubnetListOut{Data: make([]sdsclient.DataInnerIpamNetworkData, 0)}
+		emptyOut := SubnetListOut{Data: make([]sdsclient.DataInnerIpamNetworkData, 0), Limit: clampLimit(in.Limit), Offset: in.Offset}
 		if err := ValidateOptionalString(in.Space, "space"); err != nil {
 			return validationErrorResult(err, emptyOut)
 		}

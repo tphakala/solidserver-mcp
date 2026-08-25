@@ -175,8 +175,11 @@ func TestAPIErrorDetailsStruct(t *testing.T) {
 	if details.Errmsg != "IP subnet not found" {
 		t.Errorf("expected errmsg 'IP subnet not found', got %q", details.Errmsg)
 	}
-	if details.Hint == "" {
-		t.Error("expected a non-empty remediation hint for a 404")
+	// Pin the exact 404 remediation hint so the unit test is self-contained
+	// rather than relying on another test to verify the hint text indirectly.
+	const want404Hint = "(verify target space, zone, or resource exists)"
+	if details.Hint != want404Hint {
+		t.Errorf("expected 404 remediation hint %q, got %q", want404Hint, details.Hint)
 	}
 	if !strings.Contains(details.Message, "errno 6001") || !strings.Contains(details.Message, "status 404") {
 		t.Errorf("expected human message to carry status and errno, got %q", details.Message)
@@ -334,6 +337,80 @@ func TestCommonListHandler(t *testing.T) {
 	}
 	if outErr.Data == nil {
 		t.Errorf("expected non-nil Data slice on error")
+	}
+}
+
+// TestCommonListHandlerErrorReportsClampedLimit pins that every error return
+// path reports the clamped (effective) Limit, matching the Limit jsonschema,
+// rather than the raw requested value.
+func TestCommonListHandlerErrorReportsClampedLimit(t *testing.T) {
+	type testItem struct {
+		Name string `json:"name"`
+	}
+	apiErr := func(ctx context.Context, where string, limit, offset int32) ([]testItem, *http.Response, error) {
+		return nil, &http.Response{StatusCode: http.StatusInternalServerError}, errors.New("boom")
+	}
+	unreached := func(ctx context.Context, where string, limit, offset int32) ([]testItem, *http.Response, error) {
+		t.Fatal("executor must not run on a validation error path")
+		return nil, nil, nil
+	}
+
+	cases := []struct {
+		name      string
+		opts      ListOptions
+		execute   CommonListRequester[testItem]
+		wantLimit int32
+	}{
+		{"api error clamps over-limit", ListOptions{Limit: 5000}, apiErr, maxListLimit},
+		{"invalid where clamps over-limit", ListOptions{Where: "name='unclosed", Limit: 5000}, unreached, maxListLimit},
+		{"negative offset clamps over-limit", ListOptions{Limit: 5000, Offset: -1}, unreached, maxListLimit},
+		{"api error defaults zero limit", ListOptions{Limit: 0}, apiErr, defaultListLimit},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			res, out, err := commonListHandler(t.Context(), tc.opts, slog.New(slog.DiscardHandler), "test_tool", tc.execute)
+			if err != nil {
+				t.Fatalf("expected handled error, got %v", err)
+			}
+			if !res.IsError {
+				t.Error("expected IsError on the error path")
+			}
+			if out.Limit != tc.wantLimit {
+				t.Errorf("expected clamped Limit %d on error path, got %d", tc.wantLimit, out.Limit)
+			}
+		})
+	}
+}
+
+// TestFencedJSONResult pins that both the success and error results are wrapped
+// in exactly one untrusted-data fence whose body is valid JSON, and that
+// jsonResult delegates with IsError=false.
+func TestFencedJSONResult(t *testing.T) {
+	type payload struct {
+		Name string `json:"name"`
+	}
+	check := func(name string, isError bool) {
+		res := fencedJSONResult(payload{Name: name}, isError)
+		if res.IsError != isError {
+			t.Errorf("expected IsError=%v, got %v", isError, res.IsError)
+		}
+		text := resultText(res)
+		if strings.Count(text, untrustedOpen) != 1 || strings.Count(text, untrustedClose) != 1 {
+			t.Errorf("expected exactly one untrusted-data fence, got %q", text)
+		}
+		var p payload
+		if err := json.Unmarshal([]byte(unfence(t, text)), &p); err != nil {
+			t.Fatalf("fenced body is not valid JSON: %v", err)
+		}
+		if p.Name != name {
+			t.Errorf("round-trip mismatch: got %q, want %q", p.Name, name)
+		}
+	}
+	check("success", false)
+	check("failure", true)
+
+	if jsonResult(payload{Name: "z"}).IsError {
+		t.Error("jsonResult must not set IsError")
 	}
 }
 
