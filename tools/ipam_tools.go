@@ -316,7 +316,7 @@ func ipFindFreeHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 //nolint:dupl // similar list logic across modules
 func ipListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, IPListInput) (*mcp.CallToolResult, IPListOut, error) {
 	return func(ctx context.Context, request *mcp.CallToolRequest, in IPListInput) (*mcp.CallToolResult, IPListOut, error) {
-		emptyOut := IPListOut{Data: make([]sdsclient.DataInnerIpamAddressData, 0)}
+		emptyOut := IPListOut{Data: make([]sdsclient.DataInnerIpamAddressData, 0), Limit: clampLimit(in.Limit), Offset: in.Offset}
 		if err := ValidateRequiredString(in.Space, "space"); err != nil {
 			return validationErrorResult(err, emptyOut)
 		}
