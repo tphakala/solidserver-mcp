@@ -73,6 +73,16 @@ linters:
   settings:
     dupl:
       threshold: 120
+    goconst:
+      # Tool names (solidserver_*) are API identifiers that recur across tool
+      # registration, the cross-referencing prose in tool descriptions, the
+      # multi-step prompt guidance, and the resource metadata that mirrors each
+      # tool. goconst's "extract a constant" does not fit an identifier embedded
+      # in descriptive prose (it would force string concatenation through every
+      # description), so ignore that identifier family rather than fracture the
+      # prose.
+      ignore-string-values:
+        - 'solidserver_[a-z_]+'
     gocognit:
       min-complexity: 20
     gocritic:

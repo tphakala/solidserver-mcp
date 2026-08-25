@@ -128,7 +128,7 @@ func RegisterResources(s *mcp.Server, client *services.APIClientWrapper, logger 
 	})
 
 	s.AddResourceTemplate(&mcp.ResourceTemplate{
-		Name:        "subnet",
+		Name:        "subnet-detail",
 		Title:       "Subnet detail by ID",
 		URITemplate: tmplSubnetByID,
 		MIMEType:    resourceMIMEType,
