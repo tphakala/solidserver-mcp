@@ -39,6 +39,13 @@ type IPListInput struct {
 	Offset int32  `json:"offset,omitempty" jsonschema:"Offset for pagination."`
 }
 
+type IPUpdateInput struct {
+	AddressID int32  `json:"address_id" jsonschema:"Numeric address ID from solidserver_ip_list."`
+	Name      string `json:"name,omitempty" jsonschema:"New hostname to record against the address. Omit to leave unchanged."`
+	Mac       string `json:"mac,omitempty" jsonschema:"New MAC address to associate with the address. Omit to leave unchanged."`
+	Space     string `json:"space,omitempty" jsonschema:"IPAM space name (used for the protected-space guardrail)."`
+}
+
 // IPAM Output Structs
 type IPCreateOut struct {
 	Data []sdsclient.DataInnerIpamAddressAddSuccess `json:"data" jsonschema:"Allocated IP address records."`
@@ -46,6 +53,10 @@ type IPCreateOut struct {
 
 type IPDeleteOut struct {
 	Data []sdsclient.DataInnerIpamAddressDeleteSuccess `json:"data" jsonschema:"Deleted IP address response records."`
+}
+
+type IPUpdateOut struct {
+	Data []sdsclient.DataInnerIpamAddressEditSuccess `json:"data" jsonschema:"Updated IP address response records."`
 }
 
 type IPFindFreeOut = ListOutput[sdsclient.DataInnerIpamAddressData]
@@ -77,6 +88,18 @@ func RegisterIPAMTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 			"still configured on a live host invites a duplicate-address conflict later. Returns a " +
 			"confirmation message.",
 	}, ipDeleteHandler(client, logger, g))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_ip_update",
+		Title:       "Update an IP address",
+		Annotations: additiveTool("Update an IP address"),
+		Description: "Edits the hostname or MAC recorded against an existing allocation, identified by " +
+			"its numeric address_id from solidserver_ip_list, without releasing and re-allocating the " +
+			"address. Resolve the exact address_id first, since editing the wrong record renames a " +
+			"different host. This changes only the IPAM record, not any live host configuration, so a " +
+			"machine keeps its address until it is reconfigured. Use solidserver_ip_create instead to " +
+			"allocate a new address rather than change one. Returns the updated address as JSON.",
+	}, ipUpdateHandler(client, logger, g))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_ip_find_free",
@@ -273,6 +296,141 @@ func ipDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger, g *
 			data = make([]sdsclient.DataInnerIpamAddressDeleteSuccess, 0)
 		}
 		out := IPDeleteOut{Data: data}
+		return jsonResult(out), out, nil
+	}
+}
+
+// guardrailsNeedAddressLookup reports whether any configured protection needs
+// the address's real subnet or space, which the ip_update input does not carry.
+func guardrailsNeedAddressLookup(g *Guardrails) bool {
+	return g != nil && (len(g.ProtectedSubnets) > 0 || len(g.ProtectedSpaces) > 0)
+}
+
+// lookupAddressLocation resolves an address ID to its hostaddr and space so the
+// guardrails can be checked before an edit. It returns a ready-to-return error
+// result when the lookup fails or the address does not exist, so ip_update fails
+// closed rather than editing an address whose protection could not be verified.
+func lookupAddressLocation(ctx context.Context, client *services.APIClientWrapper, logger *slog.Logger, addressID int32) (hostaddr, space string, errResult *mcp.CallToolResult) {
+	authCtx := client.AuthContext(ctx)
+	resp, httpResp, apiErr := client.IpamAPI.IpamAddressInfo(authCtx).AddressId(addressID).Execute()
+	closeBody(httpResp)
+	if apiErr != nil {
+		logger.Error("API error", "tool", "solidserver_ip_update", "error", apiErr)
+		return "", "", apiErrorResult(apiErr, httpResp)
+	}
+	if resp == nil || len(resp.Data) == 0 {
+		return "", "", errorResult("address_id %d not found", addressID)
+	}
+	row := resp.Data[0]
+	if row.AddressHostaddr != nil {
+		hostaddr = *row.AddressHostaddr
+	}
+	if row.SpaceName != nil {
+		space = *row.SpaceName
+	}
+	return hostaddr, space, nil
+}
+
+func validateIPUpdateInput(in *IPUpdateInput) error {
+	if err := ValidatePositiveInt32(in.AddressID, "address_id"); err != nil {
+		return err
+	}
+	if err := ValidateOptionalString(in.Name, "name"); err != nil {
+		return err
+	}
+	if err := ValidateMAC(in.Mac, "mac"); err != nil {
+		return err
+	}
+	if in.Name == "" && in.Mac == "" {
+		return fmt.Errorf("no fields to update: set name, mac, or both")
+	}
+	return nil
+}
+
+// applyIPUpdateProtections enforces the subnet and space guardrails against the
+// address's real location, which the ip_update input does not carry. It returns
+// a ready-to-return error result on refusal or lookup failure, or nil to allow
+// the edit. It fails CLOSED: a lookup that resolves no usable hostaddr (or no
+// space, when space protections are configured) is refused rather than checked
+// against an empty string, which the guardrails treat as "no match".
+func applyIPUpdateProtections(ctx context.Context, client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails, addressID int32) *mcp.CallToolResult {
+	hostaddr, space, errResult := lookupAddressLocation(ctx, client, logger, addressID)
+	if errResult != nil {
+		return errResult
+	}
+	if len(g.ProtectedSubnets) > 0 && hostaddr == "" {
+		return errorResult("cannot verify protected-subnet rules: address_id %d resolved no hostaddr", addressID)
+	}
+	if err := g.CheckProtectedSubnet(hostaddr); err != nil {
+		return errorResult("%v", err)
+	}
+	if len(g.ProtectedSpaces) > 0 && space == "" {
+		return errorResult("cannot verify protected-space rules: address_id %d resolved no space", addressID)
+	}
+	if err := g.CheckProtectedSpace(space); err != nil {
+		return errorResult("%v", err)
+	}
+	return nil
+}
+
+// buildIPAddressEditInput builds the edit payload. Space is deliberately NOT
+// forwarded to the appliance: the tool updates name/MAC metadata only, and
+// sending space_name on an edit could reassign the address to a different space.
+// The space input is used solely for the protected-space guardrail.
+func buildIPAddressEditInput(in *IPUpdateInput) sdsclient.IpamAddressEditInput {
+	input := sdsclient.IpamAddressEditInput{AddressId: &in.AddressID}
+	if in.Name != "" {
+		input.AddressName = &in.Name
+	}
+	if in.Mac != "" {
+		input.AddressMacAddr = &in.Mac
+	}
+	return input
+}
+
+func ipUpdateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, IPUpdateInput) (*mcp.CallToolResult, IPUpdateOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in IPUpdateInput) (*mcp.CallToolResult, IPUpdateOut, error) {
+		emptyOut := IPUpdateOut{Data: make([]sdsclient.DataInnerIpamAddressEditSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := g.CheckProtectedSpace(in.Space); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := validateIPUpdateInput(&in); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+
+		// The tool takes only the numeric address_id, so a protected-subnet or
+		// protected-space rule cannot be checked against the input alone. When
+		// either protection is configured, resolve the address and re-check so an
+		// edit cannot slip past a guardrail a create or delete would hit.
+		if guardrailsNeedAddressLookup(g) {
+			if res := applyIPUpdateProtections(ctx, client, logger, g, in.AddressID); res != nil {
+				return res, emptyOut, nil
+			}
+		}
+
+		logger.Info("updating IP address", "address_id", in.AddressID, "space", in.Space)
+		input := buildIPAddressEditInput(&in)
+
+		authCtx := client.AuthContext(ctx)
+		req := client.IpamAPI.IpamAddressEdit(authCtx).IpamAddressEditInput(input)
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
+		if err != nil {
+			logger.Error("API error", "tool", "solidserver_ip_update", "error", err)
+			return apiErrorResult(err, httpResp), emptyOut, nil
+		}
+
+		var data []sdsclient.DataInnerIpamAddressEditSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerIpamAddressEditSuccess, 0)
+		}
+		out := IPUpdateOut{Data: data}
 		return jsonResult(out), out, nil
 	}
 }

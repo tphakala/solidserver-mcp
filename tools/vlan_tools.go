@@ -36,6 +36,15 @@ type VlanDeleteInput struct {
 	Name   string `json:"name" jsonschema:"The name of the VLAN to delete."`
 }
 
+type VlanDomainCreateInput struct {
+	Name        string `json:"name" jsonschema:"The name of the VLAN domain to create."`
+	Description string `json:"description,omitempty" jsonschema:"An optional human-readable description for the domain."`
+}
+
+type VlanDomainDeleteInput struct {
+	Name string `json:"name" jsonschema:"The name of the VLAN domain to delete."`
+}
+
 // VLAN Output Structs
 type VlanDomainListOut = ListOutput[sdsclient.DataInnerVlanDomainData]
 type VlanListOut = ListOutput[sdsclient.DataInnerVlanVlanData]
@@ -46,6 +55,14 @@ type VlanCreateOut struct {
 
 type VlanDeleteOut struct {
 	Data []sdsclient.DataInnerVlanVlanDeleteSuccess `json:"data" jsonschema:"Deleted VLAN response records."`
+}
+
+type VlanDomainCreateOut struct {
+	Data []sdsclient.DataInnerVlanDomainAddSuccess `json:"data" jsonschema:"Created VLAN domain response records."`
+}
+
+type VlanDomainDeleteOut struct {
+	Data []sdsclient.DataInnerVlanDomainDeleteSuccess `json:"data" jsonschema:"Deleted VLAN domain response records."`
 }
 
 // RegisterVlanTools registers VLAN management tools.
@@ -95,6 +112,104 @@ func RegisterVlanTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 			"it. Confirm the exact name with solidserver_vlan_list first, since deleting the wrong " +
 			"VLAN can black-hole traffic on the segment. Returns a confirmation message.",
 	}, vlanDeleteHandler(client, logger, g))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_vlan_domain_create",
+		Title:       "Create a VLAN domain",
+		Annotations: additiveTool("Create a VLAN domain"),
+		Description: "Creates a new VLAN domain, the namespace that VLAN IDs are unique within. Check " +
+			"whether the name is already taken with solidserver_vlan_domain_list first, since a " +
+			"duplicate is rejected rather than merged and every VLAN tool selects its domain by name. " +
+			"A new domain starts empty; add VLANs to it with solidserver_vlan_create afterwards. " +
+			"Changes appliance state and is undone only by solidserver_vlan_domain_delete. Returns the " +
+			"created domain as JSON.",
+	}, vlanDomainCreateHandler(client, logger, g))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_vlan_domain_delete",
+		Title:       "Delete a VLAN domain",
+		Annotations: destructiveTool("Delete a VLAN domain"),
+		Description: "Permanently removes a VLAN domain. This is destructive and cannot be undone from " +
+			"this server; deleting a domain takes every VLAN defined inside it with it, so audit it " +
+			"with solidserver_vlan_list first. Recreating the domain with " +
+			"solidserver_vlan_domain_create restores none of the VLANs that were in it. Returns a " +
+			"confirmation message.",
+	}, vlanDomainDeleteHandler(client, logger, g))
+}
+
+func vlanDomainCreateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, VlanDomainCreateInput) (*mcp.CallToolResult, VlanDomainCreateOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanDomainCreateInput) (*mcp.CallToolResult, VlanDomainCreateOut, error) {
+		emptyOut := VlanDomainCreateOut{Data: make([]sdsclient.DataInnerVlanDomainAddSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+
+		if err := ValidateRequiredString(in.Name, "name"); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+		if err := ValidateOptionalString(in.Description, "description"); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+
+		logger.Info("creating VLAN domain", "name", in.Name)
+		input := sdsclient.VlanDomainAddInput{DomainName: &in.Name}
+		if in.Description != "" {
+			input.DomainDescription = &in.Description
+		}
+
+		authCtx := client.AuthContext(ctx)
+		req := client.VlanAPI.VlanDomainAdd(authCtx).VlanDomainAddInput(input)
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
+		if err != nil {
+			logger.Error("API error", "tool", "solidserver_vlan_domain_create", "error", err)
+			return apiErrorResult(err, httpResp), emptyOut, nil
+		}
+
+		var data []sdsclient.DataInnerVlanDomainAddSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerVlanDomainAddSuccess, 0)
+		}
+		out := VlanDomainCreateOut{Data: data}
+		return jsonResult(out), out, nil
+	}
+}
+
+func vlanDomainDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, VlanDomainDeleteInput) (*mcp.CallToolResult, VlanDomainDeleteOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in VlanDomainDeleteInput) (*mcp.CallToolResult, VlanDomainDeleteOut, error) {
+		emptyOut := VlanDomainDeleteOut{Data: make([]sdsclient.DataInnerVlanDomainDeleteSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+
+		if err := ValidateRequiredString(in.Name, "name"); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+
+		logger.Info("deleting VLAN domain", "name", in.Name)
+		authCtx := client.AuthContext(ctx)
+		req := client.VlanAPI.VlanDomainDelete(authCtx).DomainName(in.Name)
+
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
+		if err != nil {
+			logger.Error("API error", "tool", "solidserver_vlan_domain_delete", "error", err)
+			return apiErrorResult(err, httpResp), emptyOut, nil
+		}
+
+		var data []sdsclient.DataInnerVlanDomainDeleteSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerVlanDomainDeleteSuccess, 0)
+		}
+		out := VlanDomainDeleteOut{Data: data}
+		return jsonResult(out), out, nil
+	}
 }
 
 func vlanDomainListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, VlanDomainListInput) (*mcp.CallToolResult, VlanDomainListOut, error) {

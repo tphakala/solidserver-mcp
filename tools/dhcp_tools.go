@@ -2,8 +2,13 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
+	"strconv"
+	"strings"
 
 	"github.com/efficientip-labs/solidserver-go-client/sdsclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -47,6 +52,21 @@ type DhcpStaticDeleteInput struct {
 	IP     string `json:"ip" jsonschema:"The IP address of the reservation to delete."`
 }
 
+type DhcpScopeCreateInput struct {
+	Server  string `json:"server" jsonschema:"The name of the DHCP server to create the scope on."`
+	Address string `json:"address" jsonschema:"The IPv4 network address of the scope (e.g. '10.0.0.0')."`
+	Prefix  string `json:"prefix" jsonschema:"The IPv4 prefix length of the scope (e.g. '24')."`
+	Name    string `json:"name,omitempty" jsonschema:"An optional name for the scope."`
+}
+
+type DhcpRangeCreateInput struct {
+	Server string `json:"server" jsonschema:"The name of the DHCP server."`
+	Start  string `json:"start" jsonschema:"The first IP address of the range."`
+	End    string `json:"end" jsonschema:"The last IP address of the range."`
+	Scope  string `json:"scope,omitempty" jsonschema:"The name of the scope the range belongs to (optional)."`
+	Name   string `json:"name,omitempty" jsonschema:"An optional name for the range."`
+}
+
 // DHCP Output Structs
 type DhcpServerListOut = ListOutput[sdsclient.DataInnerDhcpServerData]
 type DhcpScopeListOut = ListOutput[sdsclient.DataInnerDhcpScopeData]
@@ -59,6 +79,14 @@ type DhcpStaticAddOut struct {
 
 type DhcpStaticDeleteOut struct {
 	Data []sdsclient.DataInnerDhcpStaticDeleteSuccess `json:"data" jsonschema:"Deleted static DHCP reservation response records."`
+}
+
+type DhcpScopeCreateOut struct {
+	Data []sdsclient.DataInnerDhcpScopeAddSuccess `json:"data" jsonschema:"Created DHCP scope response records."`
+}
+
+type DhcpRangeCreateOut struct {
+	Data []sdsclient.DataInnerDhcpRangeAddSuccess `json:"data" jsonschema:"Created DHCP range response records."`
 }
 
 // RegisterDhcpTools registers DHCP management tools.
@@ -131,6 +159,42 @@ func RegisterDhcpTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 			"the address alone and does not verify which MAC the reservation belonged to. Returns a " +
 			"confirmation message.",
 	}, dhcpStaticDeleteHandler(client, logger, g))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_dhcp_scope_create",
+		Title:       "Create a DHCP scope",
+		Annotations: additiveTool("Create a DHCP scope"),
+		Description: "Creates a DHCP scope, the per-subnet configuration block that holds options and " +
+			"ranges, on a DHCP server. The server must already exist; list them with " +
+			"solidserver_dhcp_server_list. A scope on its own hands out no addresses until you add a " +
+			"range to it with solidserver_dhcp_range_create. Check for an existing scope on the same " +
+			"subnet with solidserver_dhcp_scope_list first, since an overlap is rejected. Changes " +
+			"appliance state. Returns the created scope as JSON.",
+	}, dhcpScopeCreateHandler(client, logger, g))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_dhcp_range_create",
+		Title:       "Create a DHCP range",
+		Annotations: additiveTool("Create a DHCP range"),
+		Description: "Creates a dynamic address range that DHCP allocates from, bounded by a start and " +
+			"end address. The enclosing scope and server must already exist; find them with " +
+			"solidserver_dhcp_scope_list and solidserver_dhcp_server_list. Keep static reservations " +
+			"made with solidserver_dhcp_static_add outside this range, since an address inside the " +
+			"pool can be leased to another client. Check existing ranges with " +
+			"solidserver_dhcp_range_list first to avoid an overlap. Changes appliance state. Returns " +
+			"the created range as JSON.",
+	}, dhcpRangeCreateHandler(client, logger, g))
+}
+
+// ipv4MaskBits is the total bit width of an IPv4 mask.
+const ipv4MaskBits = 32
+
+// prefixToDottedMask converts an IPv4 prefix length to a dotted-decimal netmask
+// (e.g. 24 to "255.255.255.0"), which is the form the DHCP scope endpoint's
+// scope_net_mask field expects.
+func prefixToDottedMask(prefix int) string {
+	mask := net.CIDRMask(prefix, ipv4MaskBits)
+	return net.IP(mask).String()
 }
 
 func dhcpServerListHandler(client *services.APIClientWrapper, logger *slog.Logger) func(context.Context, *mcp.CallToolRequest, DhcpServerListInput) (*mcp.CallToolResult, DhcpServerListOut, error) {
@@ -269,6 +333,133 @@ func dhcpStaticAddHandler(client *services.APIClientWrapper, logger *slog.Logger
 			data = make([]sdsclient.DataInnerDhcpStaticAddSuccess, 0)
 		}
 		out := DhcpStaticAddOut{Data: data}
+		return jsonResult(out), out, nil
+	}
+}
+
+func dhcpScopeCreateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, DhcpScopeCreateInput) (*mcp.CallToolResult, DhcpScopeCreateOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpScopeCreateInput) (*mcp.CallToolResult, DhcpScopeCreateOut, error) {
+		emptyOut := DhcpScopeCreateOut{Data: make([]sdsclient.DataInnerDhcpScopeAddSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := g.CheckProtectedSubnet(in.Address + "/" + in.Prefix); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+
+		if err := ValidateRequiredString(in.Server, "server"); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+		if err := ValidateSubnetPrefix(in.Address, in.Prefix); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+		if err := ValidateOptionalString(in.Name, "name"); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+		// ValidateSubnetPrefix (above) trims before parsing, so a whitespace-padded
+		// address or prefix passes it; trim here too so the re-parse sees the same
+		// value and never silently yields a zero prefix (mask 0.0.0.0) or a false
+		// IPv6 rejection. Both errors are dead: validation already accepted these.
+		addr, _ := netip.ParseAddr(strings.TrimSpace(in.Address))
+		if !addr.Is4() {
+			return validationErrorResult(fmt.Errorf("address %q must be IPv4: DHCP scope creation supports IPv4 scopes", in.Address), emptyOut)
+		}
+		prefixInt, _ := strconv.Atoi(strings.TrimSpace(in.Prefix))
+		mask := prefixToDottedMask(prefixInt)
+
+		logger.Info("creating DHCP scope", "server", in.Server, "address", in.Address, "prefix", in.Prefix)
+		input := sdsclient.DhcpScopeAddInput{
+			ServerName:   &in.Server,
+			ScopeNetAddr: &in.Address,
+			ScopeNetMask: &mask,
+		}
+		if in.Name != "" {
+			input.ScopeName = &in.Name
+		}
+
+		authCtx := client.AuthContext(ctx)
+		req := client.DhcpAPI.DhcpScopeAdd(authCtx).DhcpScopeAddInput(input)
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
+		if err != nil {
+			logger.Error("API error", "tool", "solidserver_dhcp_scope_create", "error", err)
+			return apiErrorResult(err, httpResp), emptyOut, nil
+		}
+
+		var data []sdsclient.DataInnerDhcpScopeAddSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerDhcpScopeAddSuccess, 0)
+		}
+		out := DhcpScopeCreateOut{Data: data}
+		return jsonResult(out), out, nil
+	}
+}
+
+func validateDhcpRangeCreateInput(in *DhcpRangeCreateInput) error {
+	if err := ValidateRequiredString(in.Server, "server"); err != nil {
+		return err
+	}
+	if err := ValidateIP(in.Start, "start"); err != nil {
+		return err
+	}
+	if err := ValidateIP(in.End, "end"); err != nil {
+		return err
+	}
+	if err := ValidateOptionalString(in.Scope, "scope"); err != nil {
+		return err
+	}
+	return ValidateOptionalString(in.Name, "name")
+}
+
+func dhcpRangeCreateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, DhcpRangeCreateInput) (*mcp.CallToolResult, DhcpRangeCreateOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpRangeCreateInput) (*mcp.CallToolResult, DhcpRangeCreateOut, error) {
+		emptyOut := DhcpRangeCreateOut{Data: make([]sdsclient.DataInnerDhcpRangeAddSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		// A range can start outside every protected subnet yet span into one, so
+		// guard the whole [start, end] interval, not just the start address.
+		if err := g.CheckProtectedRange(in.Start, in.End); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+
+		if err := validateDhcpRangeCreateInput(&in); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+
+		logger.Info("creating DHCP range", "server", in.Server, "start", in.Start, "end", in.End)
+		input := sdsclient.DhcpRangeAddInput{
+			ServerName:     &in.Server,
+			RangeStartAddr: &in.Start,
+			RangeEndAddr:   &in.End,
+		}
+		if in.Scope != "" {
+			input.ScopeName = &in.Scope
+		}
+		if in.Name != "" {
+			input.RangeName = &in.Name
+		}
+
+		authCtx := client.AuthContext(ctx)
+		req := client.DhcpAPI.DhcpRangeAdd(authCtx).DhcpRangeAddInput(input)
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
+		if err != nil {
+			logger.Error("API error", "tool", "solidserver_dhcp_range_create", "error", err)
+			return apiErrorResult(err, httpResp), emptyOut, nil
+		}
+
+		var data []sdsclient.DataInnerDhcpRangeAddSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerDhcpRangeAddSuccess, 0)
+		}
+		out := DhcpRangeCreateOut{Data: data}
 		return jsonResult(out), out, nil
 	}
 }

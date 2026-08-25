@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 const (
 	TransportStdio = "stdio"
 	TransportHTTP  = "http"
+	TransportUnix  = "unix"
 
 	LogLevelDebug = "debug"
 	LogLevelInfo  = "info"
@@ -23,6 +25,12 @@ const (
 	defaultHTTPTimeout = 30 * time.Second
 	defaultMaxRetries  = 3
 	maxPort            = 65535
+
+	defaultSocketName = "solidserver-mcp.sock"
+	// maxSocketPathLen is the tightest platform limit for a Unix socket path
+	// (sun_path is 104 bytes on darwin, 108 on Linux); cap at the smaller so a
+	// path that works locally also works on macOS.
+	maxSocketPathLen = 104
 )
 
 const (
@@ -44,6 +52,8 @@ const (
 	envLogLevel         = "SOLIDSERVER_LOG_LEVEL"
 	envHTTPHost         = "SOLIDSERVER_HTTP_HOST"
 	envHTTPPort         = "SOLIDSERVER_HTTP_PORT"
+	envSocket           = "SOLIDSERVER_SOCKET"
+	envXDGRuntimeDir    = "XDG_RUNTIME_DIR"
 )
 
 // Config holds all server configuration loaded from environment variables and secret files.
@@ -64,6 +74,7 @@ type Config struct {
 	LogLevel         string
 	HTTPHost         string
 	HTTPPort         int
+	SocketPath       string
 }
 
 func readSecret(envVar, fileVar string) (string, error) {
@@ -100,11 +111,43 @@ func parseTransport(t string) (string, error) {
 	switch t {
 	case "":
 		return TransportStdio, nil
-	case TransportStdio, TransportHTTP:
+	case TransportStdio, TransportHTTP, TransportUnix:
 		return t, nil
 	default:
-		return "", fmt.Errorf("invalid %s %q: expected %q or %q", envTransport, t, TransportStdio, TransportHTTP)
+		return "", fmt.Errorf("invalid %s %q: expected %q, %q or %q", envTransport, t, TransportStdio, TransportHTTP, TransportUnix)
 	}
+}
+
+// socketRuntimeDir returns the directory the default socket lives in: the user
+// runtime dir when set to an absolute path, otherwise /tmp. It deliberately
+// avoids os.TempDir(), whose per-user path on macOS is long enough to blow the
+// sun_path limit.
+func socketRuntimeDir() string {
+	if dir := os.Getenv(envXDGRuntimeDir); dir != "" && filepath.IsAbs(dir) {
+		return dir
+	}
+	return "/tmp"
+}
+
+// parseSocket resolves and validates the Unix socket path, used only when the
+// transport is unix. It defaults to a socket named under the runtime dir and
+// enforces an absolute path within the platform length limit.
+func parseSocket(cfg *Config) error {
+	if cfg.Transport != TransportUnix {
+		return nil
+	}
+	path := os.Getenv(envSocket)
+	if path == "" {
+		path = filepath.Join(socketRuntimeDir(), defaultSocketName)
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("invalid %s %q: socket path must be absolute", envSocket, path)
+	}
+	if len(path) >= maxSocketPathLen {
+		return fmt.Errorf("invalid %s %q: path length %d meets or exceeds the %d-byte platform limit", envSocket, path, len(path), maxSocketPathLen)
+	}
+	cfg.SocketPath = path
+	return nil
 }
 
 func parseLogLevel(l string) (string, error) {
@@ -247,6 +290,9 @@ func LoadConfig() (Config, error) {
 		return Config{}, err
 	}
 	if err := parseHTTPPort(&cfg); err != nil {
+		return Config{}, err
+	}
+	if err := parseSocket(&cfg); err != nil {
 		return Config{}, err
 	}
 

@@ -79,6 +79,17 @@ func resourceResult(uri string, res *mcp.CallToolResult, err error) (*mcp.ReadRe
 	}, nil
 }
 
+// staticResourceHandler builds a resource handler for a fixed-URI list resource.
+// run delegates to the mirrored read tool and returns its (result, error); the
+// helper feeds that through resourceResult, so the delegate-then-resourceResult
+// tail lives in one place rather than being repeated per static resource.
+func staticResourceHandler(uri string, run func(ctx context.Context) (*mcp.CallToolResult, error)) func(context.Context, *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	return func(ctx context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		res, err := run(ctx)
+		return resourceResult(uri, res, err)
+	}
+}
+
 // RegisterResources registers the static list resources and the URI-template
 // resources on the server. Resources reuse read-only tool handlers, so they are
 // not gated by guardrails and take no *Guardrails.
@@ -89,10 +100,10 @@ func RegisterResources(s *mcp.Server, client *services.APIClientWrapper, logger 
 		URI:         uriSpaces,
 		MIMEType:    resourceMIMEType,
 		Description: "All IPAM spaces on the appliance. A space is the top-level container that subnets and addresses live in; separate spaces may reuse the same RFC 1918 ranges. Mirrors solidserver_space_list.",
-	}, func(ctx context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	}, staticResourceHandler(uriSpaces, func(ctx context.Context) (*mcp.CallToolResult, error) {
 		res, _, err := spaceListHandler(client, logger)(ctx, &mcp.CallToolRequest{}, SpaceListInput{Limit: resourceListLimit})
-		return resourceResult(uriSpaces, res, err)
-	})
+		return res, err
+	}))
 
 	s.AddResource(&mcp.Resource{
 		Name:        "dns-zones",
@@ -100,10 +111,10 @@ func RegisterResources(s *mcp.Server, client *services.APIClientWrapper, logger 
 		URI:         uriDNSZones,
 		MIMEType:    resourceMIMEType,
 		Description: "All hosted DNS zones on the appliance. Mirrors solidserver_dns_zone_list.",
-	}, func(ctx context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	}, staticResourceHandler(uriDNSZones, func(ctx context.Context) (*mcp.CallToolResult, error) {
 		res, _, err := dnsZoneListHandler(client, logger)(ctx, &mcp.CallToolRequest{}, DNSZoneListInput{Limit: resourceListLimit})
-		return resourceResult(uriDNSZones, res, err)
-	})
+		return res, err
+	}))
 
 	s.AddResource(&mcp.Resource{
 		Name:        "vlan-domains",
@@ -111,10 +122,10 @@ func RegisterResources(s *mcp.Server, client *services.APIClientWrapper, logger 
 		URI:         uriVLANDomains,
 		MIMEType:    resourceMIMEType,
 		Description: "All defined VLAN domains on the appliance. Mirrors solidserver_vlan_domain_list.",
-	}, func(ctx context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	}, staticResourceHandler(uriVLANDomains, func(ctx context.Context) (*mcp.CallToolResult, error) {
 		res, _, err := vlanDomainListHandler(client, logger)(ctx, &mcp.CallToolRequest{}, VlanDomainListInput{Limit: resourceListLimit})
-		return resourceResult(uriVLANDomains, res, err)
-	})
+		return res, err
+	}))
 
 	s.AddResource(&mcp.Resource{
 		Name:        "dhcp-servers",
@@ -122,10 +133,10 @@ func RegisterResources(s *mcp.Server, client *services.APIClientWrapper, logger 
 		URI:         uriDHCPServers,
 		MIMEType:    resourceMIMEType,
 		Description: "All DHCP servers the appliance manages. Mirrors solidserver_dhcp_server_list.",
-	}, func(ctx context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	}, staticResourceHandler(uriDHCPServers, func(ctx context.Context) (*mcp.CallToolResult, error) {
 		res, _, err := dhcpServerListHandler(client, logger)(ctx, &mcp.CallToolRequest{}, DhcpServerListInput{Limit: resourceListLimit})
-		return resourceResult(uriDHCPServers, res, err)
-	})
+		return res, err
+	}))
 
 	s.AddResourceTemplate(&mcp.ResourceTemplate{
 		Name:        "subnet-detail",
