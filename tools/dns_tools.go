@@ -357,6 +357,11 @@ func validateDNSRecordUpdateInput(in *DNSRecordUpdateInput) error {
 	if err := ValidateOptionalString(in.Value, "value"); err != nil {
 		return err
 	}
+	// Zone is forwarded to the appliance in the edit payload, so reject a null
+	// byte here rather than let it reach the request.
+	if err := ValidateOptionalString(in.Zone, "zone"); err != nil {
+		return err
+	}
 	if err := ValidateTTL(in.TTL); err != nil {
 		return err
 	}

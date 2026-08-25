@@ -213,7 +213,7 @@ func testReadOnlyDNSRefusal(t *testing.T, g *Guardrails, logger *slog.Logger) {
 
 	t.Run("dns_zone_create refused", func(t *testing.T) {
 		handler := dnsZoneCreateHandler(nil, logger, g)
-		res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, DNSZoneCreateInput{Zone: "example.com", Type: "master"})
+		res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, DNSZoneCreateInput{Zone: "example.com", Type: ZoneTypeMaster})
 		assertReadOnlyError(t, res, err)
 	})
 
@@ -502,6 +502,15 @@ func testProtectedDHCPSubnetRefusal(t *testing.T, g *Guardrails, logger *slog.Lo
 		assertRefusal(t, res, err, "protected subnet")
 	})
 
+	t.Run("whitespace-padded CIDR cannot bypass dhcp_scope_create guard", func(t *testing.T) {
+		// Untrimmed input must not slip past the protected-subnet check by making
+		// the CIDR unparseable; the handler trims before the guardrail.
+		res, _, err := dhcpScopeCreateHandler(nil, logger, g)(t.Context(), &mcp.CallToolRequest{}, DhcpScopeCreateInput{
+			Server: "dhcp1", Address: " 10.2.0.0 ", Prefix: " 24 ",
+		})
+		assertRefusal(t, res, err, "protected subnet")
+	})
+
 	t.Run("protected start in dhcp_range_create", func(t *testing.T) {
 		res, _, err := dhcpRangeCreateHandler(nil, logger, g)(t.Context(), &mcp.CallToolRequest{}, DhcpRangeCreateInput{
 			Server: "dhcp1", Start: "10.1.2.3", End: "10.1.2.99",
@@ -545,7 +554,7 @@ func testProtectedZoneRefusal(t *testing.T, g *Guardrails, logger *slog.Logger) 
 	})
 
 	t.Run("protected zone in dns_zone_create", func(t *testing.T) {
-		res, _, err := dnsZoneCreateHandler(nil, logger, g)(t.Context(), &mcp.CallToolRequest{}, DNSZoneCreateInput{Zone: "corp.internal", Type: "master"})
+		res, _, err := dnsZoneCreateHandler(nil, logger, g)(t.Context(), &mcp.CallToolRequest{}, DNSZoneCreateInput{Zone: "corp.internal", Type: ZoneTypeMaster})
 		assertRefusal(t, res, err, want)
 	})
 

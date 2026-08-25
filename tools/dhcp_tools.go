@@ -341,37 +341,40 @@ func dhcpScopeCreateHandler(client *services.APIClientWrapper, logger *slog.Logg
 	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpScopeCreateInput) (*mcp.CallToolResult, DhcpScopeCreateOut, error) {
 		emptyOut := DhcpScopeCreateOut{Data: make([]sdsclient.DataInnerDhcpScopeAddSuccess, 0)}
 
+		// Normalize address and prefix up front so the same value feeds the
+		// guardrail, validation, and the appliance request. Without this, a
+		// whitespace-padded address makes the protected-subnet CIDR unparseable so
+		// the guardrail passes it (a bypass), while validation trims and accepts.
+		address := strings.TrimSpace(in.Address)
+		prefix := strings.TrimSpace(in.Prefix)
+
 		if err := g.CheckReadOnly(); err != nil {
 			return errorResult("%v", err), emptyOut, nil
 		}
-		if err := g.CheckProtectedSubnet(in.Address + "/" + in.Prefix); err != nil {
+		if err := g.CheckProtectedSubnet(address + "/" + prefix); err != nil {
 			return errorResult("%v", err), emptyOut, nil
 		}
 
 		if err := ValidateRequiredString(in.Server, "server"); err != nil {
 			return validationErrorResult(err, emptyOut)
 		}
-		if err := ValidateSubnetPrefix(in.Address, in.Prefix); err != nil {
+		if err := ValidateSubnetPrefix(address, prefix); err != nil {
 			return validationErrorResult(err, emptyOut)
 		}
 		if err := ValidateOptionalString(in.Name, "name"); err != nil {
 			return validationErrorResult(err, emptyOut)
 		}
-		// ValidateSubnetPrefix (above) trims before parsing, so a whitespace-padded
-		// address or prefix passes it; trim here too so the re-parse sees the same
-		// value and never silently yields a zero prefix (mask 0.0.0.0) or a false
-		// IPv6 rejection. Both errors are dead: validation already accepted these.
-		addr, _ := netip.ParseAddr(strings.TrimSpace(in.Address))
+		addr, _ := netip.ParseAddr(address)
 		if !addr.Is4() {
 			return validationErrorResult(fmt.Errorf("address %q must be IPv4: DHCP scope creation supports IPv4 scopes", in.Address), emptyOut)
 		}
-		prefixInt, _ := strconv.Atoi(strings.TrimSpace(in.Prefix))
+		prefixInt, _ := strconv.Atoi(prefix)
 		mask := prefixToDottedMask(prefixInt)
 
-		logger.Info("creating DHCP scope", "server", in.Server, "address", in.Address, "prefix", in.Prefix)
+		logger.Info("creating DHCP scope", "server", in.Server, "address", address, "prefix", prefix)
 		input := sdsclient.DhcpScopeAddInput{
 			ServerName:   &in.Server,
-			ScopeNetAddr: &in.Address,
+			ScopeNetAddr: &address,
 			ScopeNetMask: &mask,
 		}
 		if in.Name != "" {
@@ -407,6 +410,16 @@ func validateDhcpRangeCreateInput(in *DhcpRangeCreateInput) error {
 	}
 	if err := ValidateIP(in.End, "end"); err != nil {
 		return err
+	}
+	// Start and end are valid IPs here; require one range, not a reversed or
+	// mixed-family pair the appliance cannot describe.
+	start, _ := netip.ParseAddr(strings.TrimSpace(in.Start))
+	end, _ := netip.ParseAddr(strings.TrimSpace(in.End))
+	if start.Is4() != end.Is4() {
+		return fmt.Errorf("start %q and end %q must be the same address family", in.Start, in.End)
+	}
+	if end.Less(start) {
+		return fmt.Errorf("range end %q must not be before start %q", in.End, in.Start)
 	}
 	if err := ValidateOptionalString(in.Scope, "scope"); err != nil {
 		return err

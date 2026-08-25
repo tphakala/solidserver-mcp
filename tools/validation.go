@@ -370,20 +370,30 @@ func ValidateDNSRecordValue(rrType, value string) error {
 	return nil
 }
 
+// DNS zone type constants, mirroring the appliance's dns_zone_add zone_type
+// field (see the vendored model_dns_zone_add_input.go doc).
+const (
+	ZoneTypeMaster         = "master"
+	ZoneTypeSlave          = "slave"
+	ZoneTypeForward        = "forward"
+	ZoneTypeStub           = "stub"
+	ZoneTypeHint           = "hint"
+	ZoneTypeDelegationOnly = "delegation-only"
+)
+
 // allowedDNSZoneTypes is the set of zone types SolidServer accepts, matched
-// case-insensitively. The set mirrors the appliance's dns_zone_add zone_type
-// field (see the vendored model_dns_zone_add_input.go doc: master, slave,
-// forward, stub, hint, delegation-only).
+// case-insensitively.
 var allowedDNSZoneTypes = map[string]struct{}{
-	"master":          {},
-	"slave":           {},
-	"forward":         {},
-	"stub":            {},
-	"hint":            {},
-	"delegation-only": {},
+	ZoneTypeMaster:         {},
+	ZoneTypeSlave:          {},
+	ZoneTypeForward:        {},
+	ZoneTypeStub:           {},
+	ZoneTypeHint:           {},
+	ZoneTypeDelegationOnly: {},
 }
 
-const allowedDNSZoneTypesList = "master, slave, forward, stub, hint, delegation-only"
+const allowedDNSZoneTypesList = ZoneTypeMaster + ", " + ZoneTypeSlave + ", " + ZoneTypeForward + ", " +
+	ZoneTypeStub + ", " + ZoneTypeHint + ", " + ZoneTypeDelegationOnly
 
 // ValidateDNSZoneType verifies the zone type is one SolidServer recognizes.
 func ValidateDNSZoneType(zoneType string) error {

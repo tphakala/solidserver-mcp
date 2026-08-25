@@ -185,12 +185,12 @@ func TestValidateDNSZoneType(t *testing.T) {
 		zoneType string
 		wantErr  bool
 	}{
-		{"master", "master", false},
-		{"slave", "slave", false},
-		{"forward", "forward", false},
-		{"stub", "stub", false},
-		{"hint", "hint", false},
-		{"delegation-only", "delegation-only", false},
+		{"master", ZoneTypeMaster, false},
+		{"slave", ZoneTypeSlave, false},
+		{"forward", ZoneTypeForward, false},
+		{"stub", ZoneTypeStub, false},
+		{"hint", ZoneTypeHint, false},
+		{"delegation-only", ZoneTypeDelegationOnly, false},
 		{"delegation-only uppercase normalized", "DELEGATION-ONLY", false},
 		{"unsupported", "bogus", true},
 		{"empty", "", true},

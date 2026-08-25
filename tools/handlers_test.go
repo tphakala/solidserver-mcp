@@ -255,7 +255,7 @@ func handlerCases() []handlerCase {
 			return res, out, err
 		}},
 		{"dns_zone_create", "/api/v2.0/dns/zone/add", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
-			res, out, err := dnsZoneCreateHandler(c, l, nil)(ctx, nil, DNSZoneCreateInput{Zone: "example.com", Type: "master"})
+			res, out, err := dnsZoneCreateHandler(c, l, nil)(ctx, nil, DNSZoneCreateInput{Zone: "example.com", Type: ZoneTypeMaster})
 			return res, out, err
 		}},
 		{"dns_zone_delete", "/api/v2.0/dns/zone/delete", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
@@ -650,6 +650,30 @@ func TestHandlerInputValidationRejectsLocally(t *testing.T) {
 				return res, out, err
 			},
 			wantMsg: "is not a valid IP address",
+		},
+		{
+			name: "dhcp_range_create reversed range",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				res, out, err := dhcpRangeCreateHandler(client, l, nil)(t.Context(), nil, DhcpRangeCreateInput{Server: "dhcp1", Start: "192.0.2.50", End: "192.0.2.10"})
+				return res, out, err
+			},
+			wantMsg: "must not be before start",
+		},
+		{
+			name: "dhcp_range_create mixed address family",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				res, out, err := dhcpRangeCreateHandler(client, l, nil)(t.Context(), nil, DhcpRangeCreateInput{Server: "dhcp1", Start: "192.0.2.10", End: "2001:db8::1"})
+				return res, out, err
+			},
+			wantMsg: "same address family",
+		},
+		{
+			name: "dns_record_update null byte in zone",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				res, out, err := dnsRecordUpdateHandler(client, l, nil)(t.Context(), nil, DNSRecordUpdateInput{RrID: 1, Value: "192.0.2.20", Zone: "corp\x00.internal"})
+				return res, out, err
+			},
+			wantMsg: "cannot contain null bytes",
 		},
 	}
 

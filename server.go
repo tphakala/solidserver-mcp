@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -212,6 +211,11 @@ func serveHTTP(ctx context.Context, logger *slog.Logger, server *http.Server, ln
 		}
 		return nil
 	case err := <-errCh:
+		if err == nil {
+			// Channel closed after a clean stop (ErrServerClosed was filtered in
+			// the goroutine); there is no serve error to report.
+			return nil
+		}
 		return fmt.Errorf("%s server error: %w", transportLabel, err)
 	}
 }
@@ -252,10 +256,11 @@ func runUnix(ctx context.Context, cfg *Config, logger *slog.Logger) error {
 	return serveHTTP(ctx, logger, server, ln, TransportUnix)
 }
 
-// listenUnixSocket binds a Unix domain socket at path with 0600 permissions. It
-// removes a stale socket left by a previous run first, and sets a restrictive
-// umask around Listen so the socket is never briefly world-accessible between
-// bind and chmod (which a plain Chmod-after-Listen would allow).
+// listenUnixSocket binds a Unix domain socket at path. It removes a stale socket
+// left by a previous run first, then delegates the actual bind to the
+// platform-specific bindUnixSocket (owner-only permissions are enforced there,
+// via a tight umask plus chmod on Unix; Windows has no umask and relies on
+// directory ACLs).
 func listenUnixSocket(ctx context.Context, path string, logger *slog.Logger) (net.Listener, error) {
 	if info, statErr := os.Stat(path); statErr == nil {
 		if info.Mode()&os.ModeSocket == 0 {
@@ -266,27 +271,5 @@ func listenUnixSocket(ctx context.Context, path string, logger *slog.Logger) (ne
 		}
 		logger.Debug("removed stale socket", "socket", path)
 	}
-
-	// Close the create-then-chmod race: create the socket with no group/other
-	// bits by masking them at bind time, then restore the previous umask
-	// immediately after. Umask is process-global, but runUnix runs once at
-	// single-threaded startup before any request goroutine exists, so the brief
-	// tightened-mask window affects nothing else.
-	var lc net.ListenConfig
-	oldMask := syscall.Umask(socketUmask)
-	ln, err := lc.Listen(ctx, "unix", path)
-	syscall.Umask(oldMask)
-	if err != nil {
-		return nil, fmt.Errorf("listening on Unix socket %q: %w", path, err)
-	}
-
-	// Defense in depth: assert the intended mode even if the umask was somehow
-	// ineffective. Tear down on failure so a wrongly-permissioned socket never
-	// starts serving.
-	if err := os.Chmod(path, socketFileMode); err != nil {
-		_ = ln.Close()
-		_ = os.Remove(path)
-		return nil, fmt.Errorf("setting permissions on Unix socket %q: %w", path, err)
-	}
-	return ln, nil
+	return bindUnixSocket(ctx, path)
 }
