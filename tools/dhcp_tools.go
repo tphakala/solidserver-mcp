@@ -259,7 +259,7 @@ func dhcpStaticAddHandler(client *services.APIClientWrapper, logger *slog.Logger
 		closeBody(httpResp)
 		if err != nil {
 			logger.Error("API error", "tool", "solidserver_dhcp_static_add", "error", err)
-			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
+			return apiErrorResult(err, httpResp), emptyOut, nil
 		}
 
 		var data []sdsclient.DataInnerDhcpStaticAddSuccess
@@ -301,7 +301,7 @@ func dhcpStaticDeleteHandler(client *services.APIClientWrapper, logger *slog.Log
 		closeBody(httpResp)
 		if err != nil {
 			logger.Error("API error", "tool", "solidserver_dhcp_static_delete", "error", err)
-			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
+			return apiErrorResult(err, httpResp), emptyOut, nil
 		}
 
 		var data []sdsclient.DataInnerDhcpStaticDeleteSuccess

@@ -182,7 +182,7 @@ func vlanCreateHandler(client *services.APIClientWrapper, logger *slog.Logger, g
 		closeBody(httpResp)
 		if err != nil {
 			logger.Error("API error", "tool", "solidserver_vlan_create", "error", err)
-			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
+			return apiErrorResult(err, httpResp), emptyOut, nil
 		}
 
 		var data []sdsclient.DataInnerVlanVlanAddSuccess
@@ -221,7 +221,7 @@ func vlanDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger, g
 		closeBody(httpResp)
 		if err != nil {
 			logger.Error("API error", "tool", "solidserver_vlan_delete", "error", err)
-			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
+			return apiErrorResult(err, httpResp), emptyOut, nil
 		}
 
 		var data []sdsclient.DataInnerVlanVlanDeleteSuccess

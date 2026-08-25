@@ -189,7 +189,7 @@ func dnsRecordCreateHandler(client *services.APIClientWrapper, logger *slog.Logg
 		closeBody(httpResp)
 		if err != nil {
 			logger.Error("API error", "tool", "solidserver_dns_record_create", "error", err)
-			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
+			return apiErrorResult(err, httpResp), emptyOut, nil
 		}
 
 		var data []sdsclient.DataInnerDnsRrAddSuccess
@@ -238,7 +238,7 @@ func dnsRecordDeleteHandler(client *services.APIClientWrapper, logger *slog.Logg
 		closeBody(httpResp)
 		if err != nil {
 			logger.Error("API error", "tool", "solidserver_dns_record_delete", "error", err)
-			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
+			return apiErrorResult(err, httpResp), emptyOut, nil
 		}
 
 		var data []sdsclient.DataInnerDnsRrDeleteSuccess
