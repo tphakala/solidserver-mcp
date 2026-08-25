@@ -99,6 +99,13 @@ for the JSON-RPC channel. For HTTP transport, set `MCP_TRANSPORT=http` and
   - `solidserver_dhcp_static_add`: Add a static DHCP reservation.
   - `solidserver_dhcp_static_delete`: Delete a static DHCP reservation.
 
+### Output and error contract
+
+- **Untrusted-data fencing**: SOLIDserver free-text fields (record comments, object names, descriptions, class metadata, appliance error messages) are writable by anyone who can create or edit an object, so they are a prompt-injection surface. Appliance-derived tool output the model reads as text is wrapped in an explicit `<untrusted-data source="solidserver">` envelope with a note telling the model to treat the contents as data, not instructions. Note that the typed structured output the SDK returns alongside the text is clean JSON and is NOT fenced (fencing would make it unparseable); it carries the same appliance free-text, so a client that feeds structured content to a model should treat it as untrusted too.
+- **Guaranteed arrays**: list tools always serialize `data` as a JSON array, never `null`, even for an empty result.
+- **Pagination signals**: list results carry `has_more` and `next_offset`. The appliance does not return a total count, so `has_more` is a heuristic (a page that fills the requested `limit` is reported as possibly having more); a final page of exactly `limit` items reports `has_more: true`, and the next page returns `count: 0`. If the appliance enforces a page cap below the requested `limit`, `has_more` can be a false negative, so keep `limit` at or below the appliance's page size.
+- **Structured errors**: API failures are returned as a JSON object with `message` plus, when available, `status`, `errno`, `errmsg`, and `hint`, so a client can branch on fields instead of parsing prose. The `message` is always present and carries the full human-readable summary with a remediation hint.
+
 ## Configuration
 
 The server is configured via environment variables:

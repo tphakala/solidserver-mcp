@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -333,6 +334,30 @@ func TestIPCreateNoFreeAddress(t *testing.T) {
 	}
 }
 
+// TestFindFreeIPErrorIsFenced covers the one path where appliance error text is
+// folded into a wrapped Go error and surfaced through the unfenced errorResult:
+// the free-IP lookup inside ip_create. The appliance portion must still arrive
+// fenced so it cannot be read as instructions.
+func TestFindFreeIPErrorIsFenced(t *testing.T) {
+	client, _ := newFakeAppliance(t, http.StatusInternalServerError, `{"errno":"9","errmsg":"lookup blew up"}`)
+
+	res, _, err := ipCreateHandler(client, testLogger(), nil)(t.Context(), nil,
+		IPCreateInput{Space: testSpace, Subnet: testSubnet})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !res.IsError {
+		t.Fatal("expected an error result when the free-IP lookup fails")
+	}
+	text := resultText(res)
+	if !strings.Contains(text, "finding free IP in subnet") {
+		t.Errorf("expected the trusted wrapper prose, got: %s", text)
+	}
+	if strings.Count(text, untrustedOpen) != 1 || strings.Count(text, untrustedClose) != 1 {
+		t.Errorf("expected the appliance error portion fenced exactly once, got: %s", text)
+	}
+}
+
 // TestHandlerInputValidationRejectsLocally confirms every handler's client-side
 // validation fires before making an HTTP request. The fake appliance returns
 // HTTP 200 with an empty body; if a request is made, the test fails on the count.
@@ -546,6 +571,22 @@ func resultText(res *mcp.CallToolResult) string {
 	return b.String()
 }
 
+// unfence returns the body between the untrusted-data markers, so a test can
+// parse the JSON that tool output carries inside its untrusted-data envelope.
+func unfence(t *testing.T, text string) string {
+	t.Helper()
+	start := strings.Index(text, untrustedOpen)
+	if start < 0 {
+		t.Fatalf("no untrusted-data opening marker in %q", text)
+	}
+	start += len(untrustedOpen)
+	rel := strings.Index(text[start:], untrustedClose)
+	if rel < 0 {
+		t.Fatalf("no untrusted-data closing marker in %q", text)
+	}
+	return strings.TrimSpace(text[start : start+rel])
+}
+
 // TestStructuredAPIErrorDetails verifies that errno, errmsg, HTTP status, and remediation hints
 // are surfaced in error responses for model consumption.
 func TestStructuredAPIErrorDetails(t *testing.T) {
@@ -575,6 +616,25 @@ func TestStructuredAPIErrorDetails(t *testing.T) {
 	}
 	if out.Data == nil {
 		t.Errorf("expected non-nil Data slice on error, got nil")
+	}
+
+	// The error is surfaced as a structured APIError so a client can branch on
+	// fields rather than parse prose. It rides inside the untrusted-data fence.
+	var apiErr APIError
+	if err := json.Unmarshal([]byte(unfence(t, text)), &apiErr); err != nil {
+		t.Fatalf("error content is not parseable structured JSON: %v (text: %s)", err, text)
+	}
+	if apiErr.Status != http.StatusNotFound {
+		t.Errorf("expected structured Status=404, got %d", apiErr.Status)
+	}
+	if apiErr.Errno != "1404" {
+		t.Errorf("expected structured Errno=1404, got %q", apiErr.Errno)
+	}
+	if apiErr.Errmsg != "space not found" {
+		t.Errorf("expected structured Errmsg='space not found', got %q", apiErr.Errmsg)
+	}
+	if apiErr.Hint == "" {
+		t.Error("expected a non-empty structured Hint")
 	}
 }
 
@@ -608,6 +668,12 @@ func TestListOutputsGuaranteeArraysAndPagination(t *testing.T) {
 	}
 	if out.Offset != 10 {
 		t.Errorf("expected Offset=10, got %d", out.Offset)
+	}
+	if out.HasMore {
+		t.Errorf("expected HasMore=false for an empty page, got true")
+	}
+	if out.NextOffset != 0 {
+		t.Errorf("expected NextOffset=0 for an empty page, got %d", out.NextOffset)
 	}
 
 	text := resultText(res)

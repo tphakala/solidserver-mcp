@@ -164,7 +164,7 @@ func subnetInfoHandler(client *services.APIClientWrapper, logger *slog.Logger) f
 		closeBody(httpResp)
 		if err != nil {
 			logger.Error("API error", "tool", "solidserver_subnet_info", "error", err)
-			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
+			return apiErrorResult(err, httpResp), emptyOut, nil
 		}
 
 		var data []sdsclient.DataInnerIpamNetworkData
@@ -228,7 +228,7 @@ func subnetCreateHandler(client *services.APIClientWrapper, logger *slog.Logger,
 		closeBody(httpResp)
 		if err != nil {
 			logger.Error("API error", "tool", "solidserver_subnet_create", "error", err)
-			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
+			return apiErrorResult(err, httpResp), emptyOut, nil
 		}
 
 		var data []sdsclient.DataInnerIpamNetworkAddSuccess
@@ -273,7 +273,7 @@ func subnetDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger,
 		closeBody(httpResp)
 		if err != nil {
 			logger.Error("API error", "tool", "solidserver_subnet_delete", "error", err)
-			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
+			return apiErrorResult(err, httpResp), emptyOut, nil
 		}
 
 		var data []sdsclient.DataInnerIpamNetworkDeleteSuccess

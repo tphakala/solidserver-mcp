@@ -172,7 +172,9 @@ func findFirstFreeIP(ctx context.Context, client *services.APIClientWrapper, spa
 	listResp, httpResp, apiErr := listReq.Execute()
 	closeBody(httpResp)
 	if apiErr != nil {
-		return nil, fmt.Errorf("finding free IP in subnet %s: %s", subnet, formatAPIError(apiErr, httpResp))
+		// This error is surfaced to the model via an unfenced errorResult, so the
+		// appliance-derived portion is fenced here at its source.
+		return nil, fmt.Errorf("finding free IP in subnet %s: %s", subnet, fenceUntrusted(formatAPIError(apiErr, httpResp)))
 	}
 	if listResp == nil || len(listResp.Data) == 0 {
 		return nil, fmt.Errorf("no free IP found in subnet: %s", subnet)
@@ -216,7 +218,7 @@ func ipCreateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *
 		closeBody(httpResp)
 		if err != nil {
 			logger.Error("API error", "tool", "solidserver_ip_create", "error", err)
-			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
+			return apiErrorResult(err, httpResp), emptyOut, nil
 		}
 
 		var data []sdsclient.DataInnerIpamAddressAddSuccess
@@ -261,7 +263,7 @@ func ipDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger, g *
 		closeBody(httpResp)
 		if err != nil {
 			logger.Error("API error", "tool", "solidserver_ip_delete", "error", err)
-			return errorResult("%s", formatAPIError(err, httpResp)), emptyOut, nil
+			return apiErrorResult(err, httpResp), emptyOut, nil
 		}
 
 		var data []sdsclient.DataInnerIpamAddressDeleteSuccess
