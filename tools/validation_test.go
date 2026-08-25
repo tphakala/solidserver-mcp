@@ -179,6 +179,31 @@ func TestValidateDNSRecordType(t *testing.T) {
 	}
 }
 
+func TestValidateDNSZoneType(t *testing.T) {
+	tests := []struct {
+		name     string
+		zoneType string
+		wantErr  bool
+	}{
+		{"master", ZoneTypeMaster, false},
+		{"slave", ZoneTypeSlave, false},
+		{"forward", ZoneTypeForward, false},
+		{"stub", ZoneTypeStub, false},
+		{"hint", ZoneTypeHint, false},
+		{"delegation-only", ZoneTypeDelegationOnly, false},
+		{"delegation-only uppercase normalized", "DELEGATION-ONLY", false},
+		{"unsupported", "bogus", true},
+		{"empty", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateDNSZoneType(tt.zoneType); (err != nil) != tt.wantErr {
+				t.Errorf("ValidateDNSZoneType(%q) error = %v, wantErr %v", tt.zoneType, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateDNSRecordValue(t *testing.T) {
 	tests := []struct {
 		name    string

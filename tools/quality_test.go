@@ -60,15 +60,25 @@ var expectedTools = map[string]toolClass{
 	"solidserver_ip_list":          classRead,
 	"solidserver_doctor":           classRead,
 	// additive
-	"solidserver_vlan_create":       classAdditive,
-	"solidserver_dns_record_create": classAdditive,
-	"solidserver_subnet_create":     classAdditive,
-	"solidserver_ip_create":         classAdditive,
-	"solidserver_dhcp_static_add":   classAdditive,
+	"solidserver_vlan_create":        classAdditive,
+	"solidserver_vlan_domain_create": classAdditive,
+	"solidserver_dns_record_create":  classAdditive,
+	"solidserver_dns_record_update":  classAdditive,
+	"solidserver_dns_zone_create":    classAdditive,
+	"solidserver_subnet_create":      classAdditive,
+	"solidserver_space_create":       classAdditive,
+	"solidserver_ip_create":          classAdditive,
+	"solidserver_ip_update":          classAdditive,
+	"solidserver_dhcp_static_add":    classAdditive,
+	"solidserver_dhcp_scope_create":  classAdditive,
+	"solidserver_dhcp_range_create":  classAdditive,
 	// destructive
 	"solidserver_vlan_delete":        classDestructive,
+	"solidserver_vlan_domain_delete": classDestructive,
 	"solidserver_dns_record_delete":  classDestructive,
+	"solidserver_dns_zone_delete":    classDestructive,
 	"solidserver_subnet_delete":      classDestructive,
+	"solidserver_space_delete":       classDestructive,
 	"solidserver_ip_delete":          classDestructive,
 	"solidserver_dhcp_static_delete": classDestructive,
 }
@@ -84,26 +94,11 @@ func listRegisteredTools(t *testing.T) []*mcp.Tool {
 		t.Fatalf("NewSolidServerClient: %v", err)
 	}
 
-	server := mcp.NewServer(&mcp.Implementation{Name: "solidserver-mcp", Version: "test"}, nil)
-	RegisterAll(server, client, slog.New(slog.DiscardHandler))
+	clientSession := connectServer(t, func(s *mcp.Server) {
+		RegisterAll(s, client, slog.New(slog.DiscardHandler))
+	})
 
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	ctx := t.Context()
-
-	serverSession, err := server.Connect(ctx, serverTransport, nil)
-	if err != nil {
-		t.Fatalf("server.Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = serverSession.Close() })
-
-	clientSession, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).
-		Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatalf("client.Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = clientSession.Close() })
-
-	res, err := clientSession.ListTools(ctx, nil)
+	res, err := clientSession.ListTools(t.Context(), nil)
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}

@@ -12,27 +12,7 @@ import (
 // client session. Prompts are pure, so no appliance client is needed.
 func connectPrompts(t *testing.T) *mcp.ClientSession {
 	t.Helper()
-
-	server := mcp.NewServer(&mcp.Implementation{Name: "solidserver-mcp", Version: "test"}, nil)
-	RegisterPrompts(server, testLogger())
-
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	ctx := t.Context()
-
-	serverSession, err := server.Connect(ctx, serverTransport, nil)
-	if err != nil {
-		t.Fatalf("server.Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = serverSession.Close() })
-
-	clientSession, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).
-		Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatalf("client.Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = clientSession.Close() })
-
-	return clientSession
+	return connectServer(t, func(s *mcp.Server) { RegisterPrompts(s, testLogger()) })
 }
 
 // promptText concatenates the text of every message in a prompt result.
@@ -260,7 +240,20 @@ func TestPromptMessagesReferenceRealTools(t *testing.T) {
 		promptPlanVLANSubnet: {"domain": "corp", "space": "corp", "prefix": "192.0.2.0/24", "name": "servers"},
 	}
 
-	for name, args := range fullArgs {
+	// minimalArgs drops the optional arguments (mac and dhcp_server) so the
+	// else-branches of the conditional prompts are exercised too. Those branches
+	// reference no tools today; running them guards against a future edit that
+	// adds a tool reference (real or bogus) only to an else-branch.
+	minimalArgs := map[string]map[string]string{
+		promptProvisionHost: {
+			"space": "corp", "subnet": "192.0.2.0/24", "hostname": "web01", "zone": "example.com",
+		},
+		promptDecommissionHost: {
+			"ip_address": "192.0.2.10", "space": "corp", "hostname": "web01", "zone": "example.com",
+		},
+	}
+
+	checkPromptRefs := func(name string, args map[string]string) {
 		res, err := cs.GetPrompt(t.Context(), &mcp.GetPromptParams{Name: name, Arguments: args})
 		if err != nil {
 			t.Fatalf("GetPrompt(%s): %v", name, err)
@@ -275,5 +268,12 @@ func TestPromptMessagesReferenceRealTools(t *testing.T) {
 				t.Errorf("prompt %q references unknown tool %q", name, ref)
 			}
 		}
+	}
+
+	for name, args := range fullArgs {
+		checkPromptRefs(name, args)
+	}
+	for name, args := range minimalArgs {
+		checkPromptRefs(name, args)
 	}
 }

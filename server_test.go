@@ -19,7 +19,7 @@ func newTestMux(t *testing.T) *http.ServeMux {
 		t.Fatalf("NewSolidServerClient: %v", err)
 	}
 
-	return newHTTPMux(client, slog.New(slog.DiscardHandler), nil)
+	return newHTTPMux(client, slog.New(slog.DiscardHandler), nil, TransportHTTP)
 }
 
 // TestMCPEndpointRejectsCrossOriginPost guards the CSRF protection on /mcp.
@@ -161,7 +161,7 @@ func TestReadyEndpoint(t *testing.T) {
 			t.Fatalf("NewSolidServerClient: %v", err)
 		}
 
-		mux := newHTTPMux(client, slog.New(slog.DiscardHandler), nil)
+		mux := newHTTPMux(client, slog.New(slog.DiscardHandler), nil, TransportHTTP)
 		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/ready", http.NoBody)
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
@@ -174,3 +174,6 @@ func TestReadyEndpoint(t *testing.T) {
 		}
 	})
 }
+
+// The Unix socket transport end-to-end test lives in server_unix_test.go, which
+// is built only on non-Windows platforms.

@@ -370,6 +370,45 @@ func ValidateDNSRecordValue(rrType, value string) error {
 	return nil
 }
 
+// DNS zone type constants, mirroring the appliance's dns_zone_add zone_type
+// field (see the vendored model_dns_zone_add_input.go doc).
+const (
+	ZoneTypeMaster         = "master"
+	ZoneTypeSlave          = "slave"
+	ZoneTypeForward        = "forward"
+	ZoneTypeStub           = "stub"
+	ZoneTypeHint           = "hint"
+	ZoneTypeDelegationOnly = "delegation-only"
+)
+
+// allowedDNSZoneTypes is the set of zone types SolidServer accepts, matched
+// case-insensitively.
+var allowedDNSZoneTypes = map[string]struct{}{
+	ZoneTypeMaster:         {},
+	ZoneTypeSlave:          {},
+	ZoneTypeForward:        {},
+	ZoneTypeStub:           {},
+	ZoneTypeHint:           {},
+	ZoneTypeDelegationOnly: {},
+}
+
+const allowedDNSZoneTypesList = ZoneTypeMaster + ", " + ZoneTypeSlave + ", " + ZoneTypeForward + ", " +
+	ZoneTypeStub + ", " + ZoneTypeHint + ", " + ZoneTypeDelegationOnly
+
+// ValidateDNSZoneType verifies the zone type is one SolidServer recognizes.
+func ValidateDNSZoneType(zoneType string) error {
+	if strings.TrimSpace(zoneType) == "" {
+		return fmt.Errorf("type parameter is required (one of %s)", allowedDNSZoneTypesList)
+	}
+	if strings.ContainsRune(zoneType, '\x00') {
+		return fmt.Errorf("type parameter cannot contain null bytes")
+	}
+	if _, ok := allowedDNSZoneTypes[strings.ToLower(strings.TrimSpace(zoneType))]; !ok {
+		return fmt.Errorf("unsupported DNS zone type %q (allowed types: %s)", zoneType, allowedDNSZoneTypesList)
+	}
+	return nil
+}
+
 // ValidateTTL verifies that the DNS TTL is non-negative.
 func ValidateTTL(ttl int32) error {
 	if ttl < 0 {

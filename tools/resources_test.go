@@ -26,27 +26,8 @@ func (f *fakeAppliance) lastQuery() url.Values {
 func connectResources(t *testing.T, status int, body string) (*mcp.ClientSession, *fakeAppliance) {
 	t.Helper()
 	client, fake := newFakeAppliance(t, status, body)
-
-	server := mcp.NewServer(&mcp.Implementation{Name: "solidserver-mcp", Version: "test"}, nil)
-	RegisterResources(server, client, testLogger())
-
-	serverTransport, clientTransport := mcp.NewInMemoryTransports()
-	ctx := t.Context()
-
-	serverSession, err := server.Connect(ctx, serverTransport, nil)
-	if err != nil {
-		t.Fatalf("server.Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = serverSession.Close() })
-
-	clientSession, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).
-		Connect(ctx, clientTransport, nil)
-	if err != nil {
-		t.Fatalf("client.Connect: %v", err)
-	}
-	t.Cleanup(func() { _ = clientSession.Close() })
-
-	return clientSession, fake
+	cs := connectServer(t, func(s *mcp.Server) { RegisterResources(s, client, testLogger()) })
+	return cs, fake
 }
 
 // readResourceJSON reads a resource, asserts it has one text-plain fenced

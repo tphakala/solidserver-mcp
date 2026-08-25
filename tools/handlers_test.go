@@ -97,6 +97,46 @@ func (f *fakeAppliance) paths() []string {
 
 func testLogger() *slog.Logger { return slog.New(slog.DiscardHandler) }
 
+// fakeCalled reports whether the fake appliance recorded a request to path.
+func fakeCalled(fake *fakeAppliance, path string) bool {
+	for _, p := range fake.paths() {
+		if p == path {
+			return true
+		}
+	}
+	return false
+}
+
+// connectServer registers a caller-supplied set on an in-memory MCP server and
+// returns a connected client session. It is the single place the NewServer +
+// NewInMemoryTransports + server/client Connect + Cleanup wiring lives, shared
+// by the resources, prompts, and quality tests so those three call sites could
+// not drift.
+func connectServer(t *testing.T, register func(s *mcp.Server)) *mcp.ClientSession {
+	t.Helper()
+
+	server := mcp.NewServer(&mcp.Implementation{Name: "solidserver-mcp", Version: "test"}, nil)
+	register(server)
+
+	serverTransport, clientTransport := mcp.NewInMemoryTransports()
+	ctx := t.Context()
+
+	serverSession, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatalf("server.Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = serverSession.Close() })
+
+	clientSession, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).
+		Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatalf("client.Connect: %v", err)
+	}
+	t.Cleanup(func() { _ = clientSession.Close() })
+
+	return clientSession
+}
+
 // handlerCase drives one tool handler against the fake appliance. invoke wraps
 // the handler so the table can hold handlers with different input types.
 type handlerCase struct {
@@ -210,7 +250,88 @@ func handlerCases() []handlerCase {
 			res, out, err := dhcpStaticDeleteHandler(c, l, nil)(ctx, nil, DhcpStaticDeleteInput{Server: "dhcp1", IP: "192.0.2.50"})
 			return res, out, err
 		}},
+		{"dns_record_update", "/api/v2.0/dns/rr/edit", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := dnsRecordUpdateHandler(c, l, nil)(ctx, nil, DNSRecordUpdateInput{RrID: 1, Value: "192.0.2.20"})
+			return res, out, err
+		}},
+		{"dns_zone_create", "/api/v2.0/dns/zone/add", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := dnsZoneCreateHandler(c, l, nil)(ctx, nil, DNSZoneCreateInput{Zone: "example.com", Type: ZoneTypeMaster})
+			return res, out, err
+		}},
+		{"dns_zone_delete", "/api/v2.0/dns/zone/delete", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := dnsZoneDeleteHandler(c, l, nil)(ctx, nil, DNSZoneDeleteInput{Zone: "example.com"})
+			return res, out, err
+		}},
+		{"ip_update", "/api/v2.0/ipam/address/edit", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := ipUpdateHandler(c, l, nil)(ctx, nil, IPUpdateInput{AddressID: 1, Name: "web01"})
+			return res, out, err
+		}},
+		{"space_create", "/api/v2.0/ipam/space/add", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := spaceCreateHandler(c, l, nil)(ctx, nil, SpaceCreateInput{Name: "newspace"})
+			return res, out, err
+		}},
+		{"space_delete", "/api/v2.0/ipam/space/delete", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := spaceDeleteHandler(c, l, nil)(ctx, nil, SpaceDeleteInput{Name: "newspace"})
+			return res, out, err
+		}},
+		{"vlan_domain_create", "/api/v2.0/vlan/domain/add", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := vlanDomainCreateHandler(c, l, nil)(ctx, nil, VlanDomainCreateInput{Name: testVlanDom})
+			return res, out, err
+		}},
+		{"vlan_domain_delete", "/api/v2.0/vlan/domain/delete", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := vlanDomainDeleteHandler(c, l, nil)(ctx, nil, VlanDomainDeleteInput{Name: testVlanDom})
+			return res, out, err
+		}},
+		{"dhcp_scope_create", "/api/v2.0/dhcp/scope/add", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := dhcpScopeCreateHandler(c, l, nil)(ctx, nil, DhcpScopeCreateInput{Server: "dhcp1", Address: testSubnet, Prefix: "24"})
+			return res, out, err
+		}},
+		{"dhcp_range_create", "/api/v2.0/dhcp/range/add", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := dhcpRangeCreateHandler(c, l, nil)(ctx, nil, DhcpRangeCreateInput{Server: "dhcp1", Start: "192.0.2.10", End: "192.0.2.50"})
+			return res, out, err
+		}},
 	}
+}
+
+// TestSubnetInfoResolvesByCIDR covers the CIDR resolution path added to
+// subnet_info: a CIDR is looked up via network/list and then the numeric ID is
+// used against network/info, and an unresolvable or ambiguous CIDR fails
+// clearly instead of hitting network/info with a bogus ID.
+func TestSubnetInfoResolvesByCIDR(t *testing.T) {
+	l := testLogger()
+	const listPath = "/api/v2.0/ipam/network/list"
+	const infoPath = "/api/v2.0/ipam/network/info"
+
+	t.Run("single match resolves then fetches detail", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"network_id":"42","network_start_hostaddr":"10.0.0.0","network_is_terminal":"1","network_size":"256"}]}`)
+		res, _, err := subnetInfoHandler(client, l)(t.Context(), nil, SubnetInfoInput{CIDR: "10.0.0.0/24"})
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if res == nil || res.IsError {
+			t.Fatalf("expected success, got error result: %s", resultText(res))
+		}
+		if !fakeCalled(fake, listPath) || !fakeCalled(fake, infoPath) {
+			t.Errorf("expected network/list then network/info, got %v", fake.paths())
+		}
+	})
+
+	t.Run("no match fails without hitting network/info", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[]}`)
+		res, _, err := subnetInfoHandler(client, l)(t.Context(), nil, SubnetInfoInput{CIDR: "10.0.0.0/24"})
+		assertRefusal(t, res, err, "no terminal subnet found")
+		if fakeCalled(fake, infoPath) {
+			t.Error("network/info was called despite no resolution")
+		}
+	})
+
+	t.Run("ambiguous match asks for disambiguation", func(t *testing.T) {
+		client, _ := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"network_id":"1","network_start_hostaddr":"10.0.0.0","network_is_terminal":"1","network_size":"64"},{"network_id":"2","network_start_hostaddr":"10.0.0.0","network_is_terminal":"1","network_size":"32"}]}`)
+		res, _, err := subnetInfoHandler(client, l)(t.Context(), nil, SubnetInfoInput{CIDR: "10.0.0.0/24"})
+		assertRefusal(t, res, err, "matches 2 subnets")
+	})
 }
 
 // TestHandlersSuccess checks every handler reaches its intended endpoint and
@@ -411,12 +532,20 @@ func TestHandlerInputValidationRejectsLocally(t *testing.T) {
 			wantMsg: "prefix 45 is invalid for IPv4",
 		},
 		{
-			name: "subnet_info non-positive id",
+			name: "subnet_info without id or cidr",
 			invoke: func() (*mcp.CallToolResult, any, error) {
-				res, out, err := subnetInfoHandler(client, l)(t.Context(), nil, SubnetInfoInput{ID: 0})
+				res, out, err := subnetInfoHandler(client, l)(t.Context(), nil, SubnetInfoInput{})
 				return res, out, err
 			},
-			wantMsg: "must be a positive integer",
+			wantMsg: "provide either id or cidr",
+		},
+		{
+			name: "subnet_info invalid cidr",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				res, out, err := subnetInfoHandler(client, l)(t.Context(), nil, SubnetInfoInput{CIDR: "not-a-cidr"})
+				return res, out, err
+			},
+			wantMsg: "is not a valid CIDR",
 		},
 		{
 			name: "vlan_create invalid vlan id",
@@ -470,6 +599,78 @@ func TestHandlerInputValidationRejectsLocally(t *testing.T) {
 			name: "dns_record_create null byte in zone rejected",
 			invoke: func() (*mcp.CallToolResult, any, error) {
 				res, out, err := dnsRecordCreateHandler(client, l, nil)(t.Context(), nil, DNSRecordCreateInput{Zone: "example\x00.com", Name: "host", Type: "A", Value: "192.0.2.1"})
+				return res, out, err
+			},
+			wantMsg: "cannot contain null bytes",
+		},
+		{
+			name: "dns_record_update with nothing to change",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				res, out, err := dnsRecordUpdateHandler(client, l, nil)(t.Context(), nil, DNSRecordUpdateInput{RrID: 1})
+				return res, out, err
+			},
+			wantMsg: "no fields to update",
+		},
+		{
+			name: "dns_zone_create invalid type",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				res, out, err := dnsZoneCreateHandler(client, l, nil)(t.Context(), nil, DNSZoneCreateInput{Zone: "example.com", Type: "bogus"})
+				return res, out, err
+			},
+			wantMsg: "unsupported DNS zone type",
+		},
+		{
+			name: "ip_update with nothing to change",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				res, out, err := ipUpdateHandler(client, l, nil)(t.Context(), nil, IPUpdateInput{AddressID: 1})
+				return res, out, err
+			},
+			wantMsg: "no fields to update",
+		},
+		{
+			name: "space_create missing name",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				res, out, err := spaceCreateHandler(client, l, nil)(t.Context(), nil, SpaceCreateInput{})
+				return res, out, err
+			},
+			wantMsg: "name parameter is required",
+		},
+		{
+			name: "dhcp_scope_create rejects IPv6",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				res, out, err := dhcpScopeCreateHandler(client, l, nil)(t.Context(), nil, DhcpScopeCreateInput{Server: "dhcp1", Address: "2001:db8::", Prefix: "64"})
+				return res, out, err
+			},
+			wantMsg: "must be IPv4",
+		},
+		{
+			name: "dhcp_range_create invalid end",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				res, out, err := dhcpRangeCreateHandler(client, l, nil)(t.Context(), nil, DhcpRangeCreateInput{Server: "dhcp1", Start: "192.0.2.10", End: "not-an-ip"})
+				return res, out, err
+			},
+			wantMsg: "is not a valid IP address",
+		},
+		{
+			name: "dhcp_range_create reversed range",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				res, out, err := dhcpRangeCreateHandler(client, l, nil)(t.Context(), nil, DhcpRangeCreateInput{Server: "dhcp1", Start: "192.0.2.50", End: "192.0.2.10"})
+				return res, out, err
+			},
+			wantMsg: "must not be before start",
+		},
+		{
+			name: "dhcp_range_create mixed address family",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				res, out, err := dhcpRangeCreateHandler(client, l, nil)(t.Context(), nil, DhcpRangeCreateInput{Server: "dhcp1", Start: "192.0.2.10", End: "2001:db8::1"})
+				return res, out, err
+			},
+			wantMsg: "same address family",
+		},
+		{
+			name: "dns_record_update null byte in zone",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				res, out, err := dnsRecordUpdateHandler(client, l, nil)(t.Context(), nil, DNSRecordUpdateInput{RrID: 1, Value: "192.0.2.20", Zone: "corp\x00.internal"})
 				return res, out, err
 			},
 			wantMsg: "cannot contain null bytes",
@@ -561,14 +762,10 @@ func TestUnbalancedWHEREClauseRejected(t *testing.T) {
 }
 
 // resultText flattens a tool result's content for assertions.
+// resultText delegates to the production contentText so the test extraction of
+// a result's text cannot silently diverge from what resources render.
 func resultText(res *mcp.CallToolResult) string {
-	var b strings.Builder
-	for _, c := range res.Content {
-		if tc, ok := c.(*mcp.TextContent); ok {
-			b.WriteString(tc.Text)
-		}
-	}
-	return b.String()
+	return contentText(res)
 }
 
 // unfence returns the body between the untrusted-data markers, so a test can

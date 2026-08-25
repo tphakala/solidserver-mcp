@@ -2,8 +2,10 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/efficientip-labs/solidserver-go-client/sdsclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -29,6 +31,28 @@ type DNSRecordDeleteInput struct {
 	View   string `json:"view,omitempty" jsonschema:"DNS view name (optional)."`
 }
 
+type DNSRecordUpdateInput struct {
+	RrID   int32  `json:"rr_id" jsonschema:"Numeric resource-record ID from solidserver_dns_record_list."`
+	Value  string `json:"value,omitempty" jsonschema:"New record value or target (e.g. an IP for an A record). Omit to leave the value unchanged."`
+	TTL    int32  `json:"ttl,omitempty" jsonschema:"New time-to-live in seconds. Omit (or 0) to leave the TTL unchanged."`
+	Zone   string `json:"zone,omitempty" jsonschema:"DNS zone name the record belongs to (used for the protected-zone guardrail)."`
+	Server string `json:"server,omitempty" jsonschema:"DNS server name (optional, if required by your SolidServer setup)."`
+	View   string `json:"view,omitempty" jsonschema:"DNS view name (optional, defaults to default view)."`
+}
+
+type DNSZoneCreateInput struct {
+	Zone   string `json:"zone" jsonschema:"DNS zone name to create (e.g. 'example.com')."`
+	Type   string `json:"type" jsonschema:"Zone type: one of 'master', 'slave', 'forward', 'stub', 'hint', 'delegation-only'."`
+	Server string `json:"server,omitempty" jsonschema:"DNS server name to host the zone (optional)."`
+	View   string `json:"view,omitempty" jsonschema:"DNS view name (optional, defaults to default view)."`
+}
+
+type DNSZoneDeleteInput struct {
+	Zone   string `json:"zone" jsonschema:"DNS zone name to delete."`
+	Server string `json:"server,omitempty" jsonschema:"DNS server name hosting the zone (optional)."`
+	View   string `json:"view,omitempty" jsonschema:"DNS view name (optional)."`
+}
+
 type DNSRecordListInput struct {
 	Where  string `json:"where,omitempty" jsonschema:"SQL-like filter expression (e.g. \"zone_name='example.com' and rr_type='A'\")."`
 	Limit  int32  `json:"limit,omitempty" jsonschema:"Max number of records to return (default 50)."`
@@ -48,6 +72,18 @@ type DNSRecordCreateOut struct {
 
 type DNSRecordDeleteOut struct {
 	Data []sdsclient.DataInnerDnsRrDeleteSuccess `json:"data" jsonschema:"Deleted DNS record response."`
+}
+
+type DNSRecordUpdateOut struct {
+	Data []sdsclient.DataInnerDnsRrEditSuccess `json:"data" jsonschema:"Updated DNS record response."`
+}
+
+type DNSZoneCreateOut struct {
+	Data []sdsclient.DataInnerDnsZoneAddSuccess `json:"data" jsonschema:"Created DNS zone response."`
+}
+
+type DNSZoneDeleteOut struct {
+	Data []sdsclient.DataInnerDnsZoneDeleteSuccess `json:"data" jsonschema:"Deleted DNS zone response."`
 }
 
 type DNSRecordListOut = ListOutput[sdsclient.DataInnerDnsRrData]
@@ -79,6 +115,43 @@ func RegisterDNSTools(s *mcp.Server, client *services.APIClientWrapper, logger *
 			"until its TTL expires, so the effect is not immediate everywhere. Returns a " +
 			"confirmation message.",
 	}, dnsRecordDeleteHandler(client, logger, g))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_dns_record_update",
+		Title:       "Update a DNS record",
+		Annotations: additiveTool("Update a DNS record"),
+		Description: "Edits an existing resource record in place, identified by its numeric rr_id from " +
+			"solidserver_dns_record_list, changing its value or TTL without deleting and recreating " +
+			"it. Resolve the exact rr_id first, since editing the wrong record silently repoints a " +
+			"live name. Changing a value changes what resolvers hand out, and clients may keep the " +
+			"old answer until the record's TTL expires. Use solidserver_dns_record_create instead to " +
+			"add a new record rather than change one. Returns the updated record as JSON.",
+	}, dnsRecordUpdateHandler(client, logger, g))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_dns_zone_create",
+		Title:       "Create a DNS zone",
+		Annotations: additiveTool("Create a DNS zone"),
+		Description: "Creates a new DNS zone on the appliance so that records can be added to it with " +
+			"solidserver_dns_record_create. Check whether the zone already exists with " +
+			"solidserver_dns_zone_list first, since creating a zone that overlaps existing " +
+			"authority can change which server answers a name. A slave zone needs its masters " +
+			"configured on the appliance to transfer, and a freshly created master zone serves only " +
+			"the records you then add. Changes appliance state and is undone only by " +
+			"solidserver_dns_zone_delete. Returns the created zone as JSON.",
+	}, dnsZoneCreateHandler(client, logger, g))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_dns_zone_delete",
+		Title:       "Delete a DNS zone",
+		Annotations: destructiveTool("Delete a DNS zone"),
+		Description: "Permanently removes a DNS zone and every resource record it contains. This is " +
+			"destructive and cannot be undone from this server; recreating the zone with " +
+			"solidserver_dns_zone_create does not restore the records that were inside it. Confirm " +
+			"the exact zone with solidserver_dns_zone_list first, because deleting a zone takes every " +
+			"name under it out of service at once. Resolvers may keep serving cached answers until " +
+			"their TTLs expire. Returns a confirmation message.",
+	}, dnsZoneDeleteHandler(client, logger, g))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_dns_record_list",
@@ -271,6 +344,255 @@ func dnsRecordListHandler(client *services.APIClientWrapper, logger *slog.Logger
 				}
 				return resp.Data, httpResp, nil
 			})
+	}
+}
+
+// validateDNSRecordUpdateInput checks the update parameters. The record type is
+// unknown without a lookup, so the value is only checked for null bytes here;
+// the appliance rejects a value that is malformed for the record's real type.
+func validateDNSRecordUpdateInput(in *DNSRecordUpdateInput) error {
+	if err := ValidatePositiveInt32(in.RrID, "rr_id"); err != nil {
+		return err
+	}
+	if err := ValidateOptionalString(in.Value, "value"); err != nil {
+		return err
+	}
+	// Zone is forwarded to the appliance in the edit payload, so reject a null
+	// byte here rather than let it reach the request.
+	if err := ValidateOptionalString(in.Zone, "zone"); err != nil {
+		return err
+	}
+	if err := ValidateTTL(in.TTL); err != nil {
+		return err
+	}
+	if err := ValidateOptionalString(in.Server, "server"); err != nil {
+		return err
+	}
+	if err := ValidateOptionalString(in.View, "view"); err != nil {
+		return err
+	}
+	if strings.TrimSpace(in.Value) == "" && in.TTL <= 0 {
+		return fmt.Errorf("no fields to update: set value, ttl, or both")
+	}
+	return nil
+}
+
+func buildDNSRrEditInput(in *DNSRecordUpdateInput) sdsclient.DnsRrEditInput {
+	input := sdsclient.DnsRrEditInput{RrId: &in.RrID}
+	if strings.TrimSpace(in.Value) != "" {
+		input.RrValue1 = &in.Value
+	}
+	if in.TTL > 0 {
+		input.RrTtl = &in.TTL
+	}
+	if in.Zone != "" {
+		input.ZoneName = &in.Zone
+	}
+	if in.Server != "" {
+		input.ServerName = &in.Server
+	}
+	if in.View != "" {
+		input.ViewName = &in.View
+	}
+	return input
+}
+
+// guardrailsNeedZoneLookup reports whether a protected-zone rule is configured,
+// which the rr_id-only update input cannot be checked against directly.
+func guardrailsNeedZoneLookup(g *Guardrails) bool {
+	return g != nil && len(g.ProtectedZones) > 0
+}
+
+// lookupRecordZone resolves a resource-record ID to its zone name so the
+// protected-zone guardrail can be enforced before an edit. It fails CLOSED: an
+// API error, a missing record, or a row without a zone all return an error
+// result, so an edit whose zone cannot be verified is refused rather than
+// allowed. rrID is an int formatted into the filter, so no value-escaping is
+// needed.
+func lookupRecordZone(ctx context.Context, client *services.APIClientWrapper, logger *slog.Logger, rrID int32) (zone string, errResult *mcp.CallToolResult) {
+	authCtx := client.AuthContext(ctx)
+	resp, httpResp, apiErr := client.DnsAPI.DnsRrList(authCtx).Where(fmt.Sprintf("rr_id='%d'", rrID)).Limit(1).Execute()
+	closeBody(httpResp)
+	if apiErr != nil {
+		logger.Error("API error", "tool", "solidserver_dns_record_update", "error", apiErr)
+		return "", apiErrorResult(apiErr, httpResp)
+	}
+	if resp == nil || len(resp.Data) == 0 {
+		return "", errorResult("rr_id %d not found", rrID)
+	}
+	if resp.Data[0].ZoneName == nil || *resp.Data[0].ZoneName == "" {
+		return "", errorResult("cannot verify protected-zone rules: rr_id %d resolved no zone", rrID)
+	}
+	return *resp.Data[0].ZoneName, nil
+}
+
+// applyDNSRecordUpdateProtections enforces the protected-zone guardrail against
+// the record's real zone, resolved from its rr_id, since the update input's
+// zone is optional and a caller could omit it to sidestep a zone-name check.
+func applyDNSRecordUpdateProtections(ctx context.Context, client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails, rrID int32) *mcp.CallToolResult {
+	zone, errResult := lookupRecordZone(ctx, client, logger, rrID)
+	if errResult != nil {
+		return errResult
+	}
+	if err := g.CheckProtectedZone(zone); err != nil {
+		return errorResult("%v", err)
+	}
+	return nil
+}
+
+func dnsRecordUpdateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, DNSRecordUpdateInput) (*mcp.CallToolResult, DNSRecordUpdateOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSRecordUpdateInput) (*mcp.CallToolResult, DNSRecordUpdateOut, error) {
+		emptyOut := DNSRecordUpdateOut{Data: make([]sdsclient.DataInnerDnsRrEditSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := g.CheckProtectedZone(in.Zone); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := validateDNSRecordUpdateInput(&in); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+
+		// The input's zone is optional and the appliance edits by rr_id alone, so
+		// the zone-name check above is a no-op when the caller omits zone. When a
+		// protected zone is configured, resolve the record's real zone and re-check
+		// so a protected record cannot be edited by leaving zone unset.
+		if guardrailsNeedZoneLookup(g) {
+			if res := applyDNSRecordUpdateProtections(ctx, client, logger, g, in.RrID); res != nil {
+				return res, emptyOut, nil
+			}
+		}
+
+		logger.Info("updating DNS record", "rr_id", in.RrID, "zone", in.Zone)
+		input := buildDNSRrEditInput(&in)
+
+		authCtx := client.AuthContext(ctx)
+		req := client.DnsAPI.DnsRrEdit(authCtx).DnsRrEditInput(input)
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
+		if err != nil {
+			logger.Error("API error", "tool", "solidserver_dns_record_update", "error", err)
+			return apiErrorResult(err, httpResp), emptyOut, nil
+		}
+
+		var data []sdsclient.DataInnerDnsRrEditSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerDnsRrEditSuccess, 0)
+		}
+		out := DNSRecordUpdateOut{Data: data}
+		return jsonResult(out), out, nil
+	}
+}
+
+func validateDNSZoneCreateInput(in *DNSZoneCreateInput) error {
+	if err := ValidateDomainName(in.Zone, "zone"); err != nil {
+		return err
+	}
+	if err := ValidateDNSZoneType(in.Type); err != nil {
+		return err
+	}
+	if err := ValidateOptionalString(in.Server, "server"); err != nil {
+		return err
+	}
+	return ValidateOptionalString(in.View, "view")
+}
+
+func dnsZoneCreateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, DNSZoneCreateInput) (*mcp.CallToolResult, DNSZoneCreateOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSZoneCreateInput) (*mcp.CallToolResult, DNSZoneCreateOut, error) {
+		emptyOut := DNSZoneCreateOut{Data: make([]sdsclient.DataInnerDnsZoneAddSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := g.CheckProtectedZone(in.Zone); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+
+		if err := validateDNSZoneCreateInput(&in); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+
+		logger.Info("creating DNS zone", "zone", in.Zone, "type", in.Type)
+		input := sdsclient.DnsZoneAddInput{
+			ZoneName: &in.Zone,
+			ZoneType: &in.Type,
+		}
+		if in.Server != "" {
+			input.ServerName = &in.Server
+		}
+		if in.View != "" {
+			input.ViewName = &in.View
+		}
+
+		authCtx := client.AuthContext(ctx)
+		req := client.DnsAPI.DnsZoneAdd(authCtx).DnsZoneAddInput(input)
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
+		if err != nil {
+			logger.Error("API error", "tool", "solidserver_dns_zone_create", "error", err)
+			return apiErrorResult(err, httpResp), emptyOut, nil
+		}
+
+		var data []sdsclient.DataInnerDnsZoneAddSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerDnsZoneAddSuccess, 0)
+		}
+		out := DNSZoneCreateOut{Data: data}
+		return jsonResult(out), out, nil
+	}
+}
+
+func dnsZoneDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, DNSZoneDeleteInput) (*mcp.CallToolResult, DNSZoneDeleteOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DNSZoneDeleteInput) (*mcp.CallToolResult, DNSZoneDeleteOut, error) {
+		emptyOut := DNSZoneDeleteOut{Data: make([]sdsclient.DataInnerDnsZoneDeleteSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := g.CheckProtectedZone(in.Zone); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+
+		if err := ValidateDomainName(in.Zone, "zone"); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+		if err := ValidateOptionalString(in.Server, "server"); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+		if err := ValidateOptionalString(in.View, "view"); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+
+		logger.Info("deleting DNS zone", "zone", in.Zone)
+		authCtx := client.AuthContext(ctx)
+		req := client.DnsAPI.DnsZoneDelete(authCtx).ZoneName(in.Zone)
+		if in.Server != "" {
+			req = req.ServerName(in.Server)
+		}
+		if in.View != "" {
+			req = req.ViewName(in.View)
+		}
+
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
+		if err != nil {
+			logger.Error("API error", "tool", "solidserver_dns_zone_delete", "error", err)
+			return apiErrorResult(err, httpResp), emptyOut, nil
+		}
+
+		var data []sdsclient.DataInnerDnsZoneDeleteSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerDnsZoneDeleteSuccess, 0)
+		}
+		out := DNSZoneDeleteOut{Data: data}
+		return jsonResult(out), out, nil
 	}
 }
 

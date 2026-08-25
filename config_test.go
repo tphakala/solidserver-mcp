@@ -235,7 +235,7 @@ func TestLoadConfig_InvalidValues(t *testing.T) {
 		value   string
 		wantErr string
 	}{
-		{"unknown transport", envTransport, "grpc", `invalid SOLIDSERVER_TRANSPORT "grpc": expected "stdio" or "http"`},
+		{"unknown transport", envTransport, "grpc", `invalid SOLIDSERVER_TRANSPORT "grpc": expected "stdio", "http" or "unix"`},
 		{"unknown log level", envLogLevel, "trace", `invalid SOLIDSERVER_LOG_LEVEL "trace": expected "debug", "info", "warn" or "error"`},
 		{"non-boolean ssl verify", envSSLVerify, "fasle", `invalid SOLIDSERVER_SSL_VERIFY "fasle": expected a boolean`},
 		{"non-boolean read only", envReadOnly, "notabool", `invalid SOLIDSERVER_READ_ONLY "notabool": expected a boolean`},
