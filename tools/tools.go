@@ -99,7 +99,16 @@ const (
 // is applied exactly once per value, at the appliance-output paths (jsonResult,
 // apiErrorResult, and the appliance portion of findFirstFreeIP's error); those
 // are the only places that build model-visible text from appliance data.
+//
+// The body is attacker-controllable, so every "<" is neutralized to the HTML
+// entity "&lt;" before wrapping: otherwise a value containing the literal
+// "</untrusted-data>" would close the envelope early and let the text after it
+// escape the fence. The JSON paths (jsonResult, apiErrorResult) already emit
+// "<" as an escape via encoding/json's default HTML escaping, so no literal "<"
+// survives for this to touch there; it closes the gap only on the raw-string
+// path (findFirstFreeIP).
 func fenceUntrusted(body string) string {
+	body = strings.ReplaceAll(body, "<", "&lt;")
 	return untrustedNote + untrustedOpen + "\n" + body + "\n" + untrustedClose
 }
 
