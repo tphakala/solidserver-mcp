@@ -47,3 +47,29 @@ changelog:
       - '^style:'
       - '^docs?:'
       - '^chore\(deps\): bump'
+
+# Homebrew tap: on every tagged release, GoReleaser regenerates the formula in
+# tphakala/homebrew-tap and pushes it, so the tap stays current with no manual
+# steps. Auth is a scoped write deploy key (secret HOMEBREW_TAP_DEPLOY_KEY) pushed
+# over SSH, not a personal access token, so its reach is limited to that one repo.
+#
+# Kept as a formula (`brews`), not a cask (`homebrew_casks`): Homebrew casks are
+# macOS-only and solidserver-mcp ships Linux binaries too, so a formula's
+# on_macos/on_linux blocks let `brew install` work on both. GoReleaser deprecated
+# `brews` but it stays functional in v2, and the release job runs `release`, not
+# `check`, so the deprecation only warns. Revisit if GoReleaser removes `brews` in
+# a future major.
+brews:
+  - repository:
+      owner: tphakala
+      name: homebrew-tap
+      branch: main
+      git:
+        url: "git@github.com:tphakala/homebrew-tap.git"
+        private_key: "{{ .Env.HOMEBREW_TAP_DEPLOY_KEY }}"
+    directory: Formula
+    homepage: "https://github.com/tphakala/solidserver-mcp"
+    description: "Model Context Protocol (MCP) server for EfficientIP SolidServer IPAM/DNS/DHCP management"
+    license: "Apache-2.0"
+    test: |
+      system "#{bin}/solidserver-mcp", "--version"

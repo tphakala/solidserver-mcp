@@ -1,6 +1,6 @@
 module github.com/tphakala/solidserver-mcp
 
-go 1.26
+go 1.27
 
 require (
 	github.com/efficientip-labs/solidserver-go-client v1.8.4-3

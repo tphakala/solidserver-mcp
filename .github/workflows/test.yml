@@ -20,7 +20,7 @@ concurrency:
 env:
   # Pinned to match the local toolchain so local runs and CI use the same linter
   # version, and therefore the same ruleguard behaviour.
-  GOLANGCI_LINT_VERSION: 'v2.12.2'
+  GOLANGCI_LINT_VERSION: 'v2.13.1'
 
 jobs:
   test:
