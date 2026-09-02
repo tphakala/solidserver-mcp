@@ -45,9 +45,13 @@ func readOnlyTool(title string) *mcp.ToolAnnotations {
 	}
 }
 
-// additiveTool annotates a tool that creates state without destroying any.
-// Not idempotent: calling it again either allocates another object or fails on
-// a duplicate.
+// additiveTool annotates a tool that adds or edits state without destroying
+// any: object creates and in-place updates alike. IdempotentHint is left false
+// as the conservative default. A repeated create either allocates another
+// object or fails on a duplicate, so it is genuinely non-idempotent; an update
+// that re-applies the same edit is in practice idempotent, but the annotation
+// does not promise it, preferring conservatism over a guarantee not every
+// additive tool can keep.
 func additiveTool(title string) *mcp.ToolAnnotations {
 	return &mcp.ToolAnnotations{
 		Title:           title,
