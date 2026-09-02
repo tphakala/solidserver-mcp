@@ -25,6 +25,17 @@ const (
 	maxListLimit     = 1000
 )
 
+// addrExtent is the inclusive first-and-last address of a network object,
+// resolved from the appliance so a delete or edit that names the object by less
+// than its full CIDR can be checked against protected-subnet rules for its whole
+// range. Empty fields mean the extent could not be resolved; the guardrail
+// treats an empty extent as no overlap and the caller decides whether to fail
+// closed.
+type addrExtent struct {
+	start string
+	end   string
+}
+
 // readOnlyTool annotates a tool that only reads state.
 func readOnlyTool(title string) *mcp.ToolAnnotations {
 	return &mcp.ToolAnnotations{

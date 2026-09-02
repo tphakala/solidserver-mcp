@@ -236,6 +236,34 @@ func ValidateSubnetPrefix(addrStr, prefixStr string) error {
 	return nil
 }
 
+// canonicalCIDR builds the canonical CIDR string for a protected-subnet
+// guardrail check from a start address and a prefix-length string. It returns
+// ("", false) when address and prefix do not form a valid prefix for the
+// address family. Callers must use this rather than concatenating
+// address+"/"+prefix: netip.ParsePrefix (which CheckProtectedSubnet uses) is
+// stricter than the strconv.Atoi-based prefix validators, so a validated but
+// non-canonical prefix such as "08", or a length out of range for the family
+// such as "128" on IPv4, makes ParsePrefix fail and CheckProtectedSubnet fall
+// OPEN. Normalizing through netip.Addr.Prefix here yields a canonical string
+// ("10.0.0.0/8") the guardrail always parses, and a false result the caller
+// turns into a fail-closed refusal (post-validation) or defers to validation
+// (pre-validation), never a silent bypass.
+func canonicalCIDR(address, prefix string) (string, bool) {
+	addr, err := netip.ParseAddr(strings.TrimSpace(address))
+	if err != nil {
+		return "", false
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(prefix))
+	if err != nil {
+		return "", false
+	}
+	p, err := addr.Prefix(n)
+	if err != nil {
+		return "", false
+	}
+	return p.String(), true
+}
+
 // ValidateMAC verifies that a string is a valid MAC address.
 func ValidateMAC(macStr, paramName string) error {
 	if strings.TrimSpace(macStr) == "" {

@@ -69,6 +69,7 @@ var expectedTools = map[string]toolClass{
 	"solidserver_space_create":       classAdditive,
 	"solidserver_ip_create":          classAdditive,
 	"solidserver_ip_update":          classAdditive,
+	"solidserver_subnet_update":      classAdditive,
 	"solidserver_dhcp_static_add":    classAdditive,
 	"solidserver_dhcp_scope_create":  classAdditive,
 	"solidserver_dhcp_range_create":  classAdditive,
@@ -81,6 +82,8 @@ var expectedTools = map[string]toolClass{
 	"solidserver_space_delete":       classDestructive,
 	"solidserver_ip_delete":          classDestructive,
 	"solidserver_dhcp_static_delete": classDestructive,
+	"solidserver_dhcp_scope_delete":  classDestructive,
+	"solidserver_dhcp_range_delete":  classDestructive,
 }
 
 // listRegisteredTools registers every tool on a real server and reads the set

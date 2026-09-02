@@ -180,6 +180,12 @@ func testReadOnlySubnetRefusal(t *testing.T, g *Guardrails, logger *slog.Logger)
 		res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, SpaceDeleteInput{Name: "dev"})
 		assertReadOnlyError(t, res, err)
 	})
+
+	t.Run("subnet_update refused", func(t *testing.T) {
+		handler := subnetUpdateHandler(nil, logger, g)
+		res, _, err := handler(t.Context(), &mcp.CallToolRequest{}, SubnetUpdateInput{SubnetID: 1, Name: "x"})
+		assertReadOnlyError(t, res, err)
+	})
 }
 
 func testReadOnlyDNSRefusal(t *testing.T, g *Guardrails, logger *slog.Logger) {
@@ -296,6 +302,20 @@ func testReadOnlyDHCPRefusal(t *testing.T, g *Guardrails, logger *slog.Logger) {
 			Server: "dhcp1",
 			Start:  "192.168.1.10",
 			End:    "192.168.1.50",
+		})
+		assertReadOnlyError(t, res, err)
+	})
+
+	t.Run("dhcp_scope_delete refused", func(t *testing.T) {
+		res, _, err := dhcpScopeDeleteHandler(nil, logger, g)(t.Context(), &mcp.CallToolRequest{}, DhcpScopeDeleteInput{
+			Server: "dhcp1", Address: "192.168.1.0",
+		})
+		assertReadOnlyError(t, res, err)
+	})
+
+	t.Run("dhcp_range_delete refused", func(t *testing.T) {
+		res, _, err := dhcpRangeDeleteHandler(nil, logger, g)(t.Context(), &mcp.CallToolRequest{}, DhcpRangeDeleteInput{
+			Server: "dhcp1", Start: "192.168.1.10", End: "192.168.1.50",
 		})
 		assertReadOnlyError(t, res, err)
 	})
@@ -528,6 +548,23 @@ func testProtectedDHCPSubnetRefusal(t *testing.T, g *Guardrails, logger *slog.Lo
 		})
 		assertRefusal(t, res, err, "overlapping protected subnet")
 	})
+
+	t.Run("protected subnet in dhcp_scope_delete", func(t *testing.T) {
+		// The scope's network address 10.2.0.0 sits inside protected 10.0.0.0/8,
+		// so the cheap bare-address check refuses it with no appliance lookup.
+		res, _, err := dhcpScopeDeleteHandler(nil, logger, g)(t.Context(), &mcp.CallToolRequest{}, DhcpScopeDeleteInput{
+			Server: "dhcp1", Address: "10.2.0.0",
+		})
+		assertRefusal(t, res, err, "protected subnet")
+	})
+
+	t.Run("dhcp_range_delete span crossing into protected subnet", func(t *testing.T) {
+		spanG := &Guardrails{ProtectedSubnets: []string{"192.168.1.0/24"}}
+		res, _, err := dhcpRangeDeleteHandler(nil, logger, spanG)(t.Context(), &mcp.CallToolRequest{}, DhcpRangeDeleteInput{
+			Server: "dhcp1", Start: "192.168.0.10", End: "192.168.2.10",
+		})
+		assertRefusal(t, res, err, "overlapping protected subnet")
+	})
 }
 
 func testProtectedZoneRefusal(t *testing.T, g *Guardrails, logger *slog.Logger) {
@@ -654,6 +691,282 @@ func TestDNSRecordUpdateGuardrailLookup(t *testing.T) {
 		assertRefusal(t, res, err, "rr_id 5 not found")
 		if fakeCalled(fake, editPath) {
 			t.Error("edit endpoint was called despite an unresolvable record")
+		}
+	})
+}
+
+// TestSubnetUpdateGuardrailLookup covers the subnet_update path that resolves a
+// subnet's real extent and space by numeric id before editing, so a
+// protected-subnet or protected-space rule cannot be sidestepped by an edit
+// that only names the id, and so that a resize cannot grow the subnet into a
+// protected neighbour.
+func TestSubnetUpdateGuardrailLookup(t *testing.T) {
+	const infoPath = "/api/v2.0/ipam/network/info"
+	const editPath = "/api/v2.0/ipam/network/edit"
+	logger := testLogger()
+
+	t.Run("refuses a subnet inside a protected subnet", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"network_start_hostaddr":"10.1.0.0","network_end_hostaddr":"10.1.0.255","space_name":"dev"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, _, err := subnetUpdateHandler(client, logger, g)(t.Context(), nil, SubnetUpdateInput{SubnetID: 7, Name: "renamed"})
+		assertRefusal(t, res, err, "overlapping protected subnet")
+		if fakeCalled(fake, editPath) {
+			t.Error("edit endpoint was called despite the guardrail refusal")
+		}
+	})
+
+	t.Run("refuses a resize that would grow into a protected subnet", func(t *testing.T) {
+		// The subnet (10.0.0.0/24) does not overlap the protected 10.5.0.0/16, so
+		// the pre-edit check passes, but resizing it to /8 would swallow the
+		// protected subnet. The post-edit CIDR check must catch that.
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"network_start_hostaddr":"10.0.0.0","network_end_hostaddr":"10.0.0.255","space_name":"dev"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.5.0.0/16"}}
+		res, _, err := subnetUpdateHandler(client, logger, g)(t.Context(), nil, SubnetUpdateInput{SubnetID: 7, Prefix: "8"})
+		assertRefusal(t, res, err, "overlapping protected subnet")
+		if fakeCalled(fake, editPath) {
+			t.Error("edit endpoint was called despite the resize guardrail refusal")
+		}
+	})
+
+	t.Run("proceeds to edit when the subnet is not protected", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"network_start_hostaddr":"192.0.2.0","network_end_hostaddr":"192.0.2.255","space_name":"dev"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, _, err := subnetUpdateHandler(client, logger, g)(t.Context(), nil, SubnetUpdateInput{SubnetID: 7, Name: "renamed"})
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if res == nil || res.IsError {
+			t.Fatalf("expected success, got error result: %s", resultText(res))
+		}
+		if !fakeCalled(fake, infoPath) {
+			t.Error("expected the subnet extent lookup to run")
+		}
+		if !fakeCalled(fake, editPath) {
+			t.Error("expected the edit to proceed after the guardrail passed")
+		}
+	})
+
+	t.Run("fails closed when the lookup resolves no extent", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[{"space_name":"dev"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, _, err := subnetUpdateHandler(client, logger, g)(t.Context(), nil, SubnetUpdateInput{SubnetID: 7, Name: "renamed"})
+		assertRefusal(t, res, err, "resolved no address extent")
+		if fakeCalled(fake, editPath) {
+			t.Error("edit endpoint was called despite an unverifiable protection")
+		}
+	})
+}
+
+// TestSubnetDeleteEnclosesProtectedSubnet covers the subnet_delete path that
+// resolves a subnet's real extent before deleting, so a larger subnet whose
+// start address sits outside every protected subnet but which encloses one
+// cannot be deleted; a bare-address check alone would let that through.
+func TestSubnetDeleteEnclosesProtectedSubnet(t *testing.T) {
+	const listPath = "/api/v2.0/ipam/network/list"
+	const deletePath = "/api/v2.0/ipam/network/delete"
+	logger := testLogger()
+
+	t.Run("refuses deleting a subnet that encloses a protected subnet", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"network_start_hostaddr":"10.0.0.0","network_end_hostaddr":"10.255.255.255","network_is_terminal":"1"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.5.0.0/16"}}
+		res, _, err := subnetDeleteHandler(client, logger, g)(t.Context(), nil, SubnetDeleteInput{Space: "dev", Address: "10.0.0.0"})
+		assertRefusal(t, res, err, "overlapping protected subnet")
+		if fakeCalled(fake, deletePath) {
+			t.Error("delete endpoint was called despite the enclosed protected subnet")
+		}
+	})
+
+	t.Run("proceeds when the resolved subnet does not overlap", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"network_start_hostaddr":"192.0.2.0","network_end_hostaddr":"192.0.2.255","network_is_terminal":"1"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, _, err := subnetDeleteHandler(client, logger, g)(t.Context(), nil, SubnetDeleteInput{Space: "dev", Address: "192.0.2.0"})
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if res == nil || res.IsError {
+			t.Fatalf("expected success, got error result: %s", resultText(res))
+		}
+		if !fakeCalled(fake, listPath) {
+			t.Error("expected the subnet extent lookup to run")
+		}
+		if !fakeCalled(fake, deletePath) {
+			t.Error("expected the delete to proceed after the guardrail passed")
+		}
+	})
+}
+
+// TestSubnetDeleteChecksAllNetworksAtAddress covers the multi-row extent lookup:
+// a benign terminal subnet and an enclosing non-terminal block can share a start
+// address, and the delete API is not restricted to terminal subnets, so every
+// network at the address must be checked, not just the first row.
+func TestSubnetDeleteChecksAllNetworksAtAddress(t *testing.T) {
+	const deletePath = "/api/v2.0/ipam/network/delete"
+	logger := testLogger()
+
+	// Row 0 is a benign /24; row 1 is a block that encloses the protected subnet.
+	client, fake := newFakeAppliance(t, http.StatusOK,
+		`{"data":[`+
+			`{"network_start_hostaddr":"10.0.0.0","network_end_hostaddr":"10.0.0.255","network_is_terminal":"1"},`+
+			`{"network_start_hostaddr":"10.0.0.0","network_end_hostaddr":"10.255.255.255","network_is_terminal":"0"}]}`)
+	g := &Guardrails{ProtectedSubnets: []string{"10.5.0.0/16"}}
+	res, _, err := subnetDeleteHandler(client, logger, g)(t.Context(), nil, SubnetDeleteInput{Space: "dev", Address: "10.0.0.0"})
+	assertRefusal(t, res, err, "overlapping protected subnet")
+	if fakeCalled(fake, deletePath) {
+		t.Error("delete endpoint was called despite an enclosing block subnet at the address")
+	}
+}
+
+// TestSubnetDeleteFailsClosedOnUnresolvableExtent covers a resolved network row
+// that lacks an end address: its span cannot be checked, so the delete is
+// refused rather than allowed on an unverifiable extent.
+func TestSubnetDeleteFailsClosedOnUnresolvableExtent(t *testing.T) {
+	const deletePath = "/api/v2.0/ipam/network/delete"
+	logger := testLogger()
+	client, fake := newFakeAppliance(t, http.StatusOK,
+		`{"data":[{"network_start_hostaddr":"192.0.2.0"}]}`)
+	g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+	res, _, err := subnetDeleteHandler(client, logger, g)(t.Context(), nil, SubnetDeleteInput{Space: "dev", Address: "192.0.2.0"})
+	assertRefusal(t, res, err, "resolved no address extent")
+	if fakeCalled(fake, deletePath) {
+		t.Error("delete endpoint was called despite an unverifiable subnet extent")
+	}
+}
+
+// TestDhcpScopeDeleteResolvesExtent covers the scope-delete guardrail resolving
+// the scope's real extent from the appliance, so an enclosing scope whose net
+// address sits outside every protected subnet is still refused, and a caller
+// cannot narrow the guard because there is no caller-supplied prefix.
+func TestDhcpScopeDeleteResolvesExtent(t *testing.T) {
+	const listPath = "/api/v2.0/dhcp/scope/list"
+	const deletePath = "/api/v2.0/dhcp/scope/delete"
+	logger := testLogger()
+
+	t.Run("refuses a scope that encloses a protected subnet", func(t *testing.T) {
+		// Scope net address 10.0.0.0 is outside the protected 10.5.0.0/16, but the
+		// scope spans 10.0.0.0-10.255.255.255 and encloses it.
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"scope_net_addr":"10.0.0.0","scope_start_address_addr":"10.0.0.0","scope_end_address_addr":"10.255.255.255"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.5.0.0/16"}}
+		res, _, err := dhcpScopeDeleteHandler(client, logger, g)(t.Context(), nil, DhcpScopeDeleteInput{Server: "dhcp1", Address: "10.0.0.0"})
+		assertRefusal(t, res, err, "overlapping protected subnet")
+		if fakeCalled(fake, deletePath) {
+			t.Error("delete endpoint was called despite the enclosing scope")
+		}
+		if !fakeCalled(fake, listPath) {
+			t.Error("expected the scope extent lookup to run")
+		}
+	})
+
+	t.Run("proceeds when the scope does not overlap", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"scope_net_addr":"192.0.2.0","scope_start_address_addr":"192.0.2.0","scope_end_address_addr":"192.0.2.255"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, _, err := dhcpScopeDeleteHandler(client, logger, g)(t.Context(), nil, DhcpScopeDeleteInput{Server: "dhcp1", Address: "192.0.2.0"})
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if res == nil || res.IsError {
+			t.Fatalf("expected success, got error result: %s", resultText(res))
+		}
+		if !fakeCalled(fake, listPath) || !fakeCalled(fake, deletePath) {
+			t.Errorf("expected scope/list then scope/delete, got %v", fake.paths())
+		}
+	})
+
+	t.Run("fails closed when a resolved scope has no extent", func(t *testing.T) {
+		// The scope row lacks an end address, so its span cannot be checked; the
+		// delete must be refused rather than proceed on an unverifiable extent.
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"scope_net_addr":"192.0.2.0","scope_start_address_addr":"192.0.2.0"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, _, err := dhcpScopeDeleteHandler(client, logger, g)(t.Context(), nil, DhcpScopeDeleteInput{Server: "dhcp1", Address: "192.0.2.0"})
+		assertRefusal(t, res, err, "resolved no address extent")
+		if fakeCalled(fake, deletePath) {
+			t.Error("delete endpoint was called despite an unverifiable scope extent")
+		}
+	})
+}
+
+// TestGuardrailPrefixCanonicalization covers the fail-open bypass a non-canonical
+// prefix used to create: netip.ParsePrefix rejects "08" (leading zero) and a
+// family-invalid length, while the strconv.Atoi-based validators accept "08", so
+// concatenating address+"/"+prefix silently skipped the Overlaps check.
+// canonicalCIDR normalizes the prefix so the guard fires.
+func TestGuardrailPrefixCanonicalization(t *testing.T) {
+	logger := testLogger()
+	g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+
+	t.Run("subnet_create leading-zero prefix cannot bypass the guard", func(t *testing.T) {
+		res, _, err := subnetCreateHandler(nil, logger, g)(t.Context(), &mcp.CallToolRequest{}, SubnetCreateInput{
+			Space: "dev", Address: "10.0.0.0", Prefix: "08", Name: "sneaky",
+		})
+		assertRefusal(t, res, err, "protected subnet")
+	})
+
+	t.Run("dhcp_scope_create leading-zero prefix cannot bypass the guard", func(t *testing.T) {
+		res, _, err := dhcpScopeCreateHandler(nil, logger, g)(t.Context(), &mcp.CallToolRequest{}, DhcpScopeCreateInput{
+			Server: "dhcp1", Address: "10.0.0.0", Prefix: "08",
+		})
+		assertRefusal(t, res, err, "protected subnet")
+	})
+}
+
+// TestSubnetUpdateInputAndSpaceGuards covers subnet_update guards the resolve
+// test does not: the empty-edit validation, the input-level protected-space
+// check, the resolved protected-space refusal, and the resize prefixes that used
+// to fail the guard open (leading zero and an IPv4-invalid /128).
+func TestSubnetUpdateInputAndSpaceGuards(t *testing.T) {
+	const editPath = "/api/v2.0/ipam/network/edit"
+	logger := testLogger()
+
+	t.Run("no fields to update is rejected", func(t *testing.T) {
+		res, _, err := subnetUpdateHandler(nil, logger, nil)(t.Context(), nil, SubnetUpdateInput{SubnetID: 1})
+		assertRefusal(t, res, err, "no fields to update")
+	})
+
+	t.Run("protected space via input is refused without a lookup", func(t *testing.T) {
+		g := &Guardrails{ProtectedSpaces: []string{"production"}}
+		res, _, err := subnetUpdateHandler(nil, logger, g)(t.Context(), nil, SubnetUpdateInput{SubnetID: 1, Name: "x", Space: "production"})
+		assertRefusal(t, res, err, "protected space")
+	})
+
+	t.Run("protected space resolved from the subnet is refused", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"network_start_hostaddr":"192.0.2.0","network_end_hostaddr":"192.0.2.255","space_name":"production"}]}`)
+		g := &Guardrails{ProtectedSpaces: []string{"production"}}
+		res, _, err := subnetUpdateHandler(client, logger, g)(t.Context(), nil, SubnetUpdateInput{SubnetID: 7, Name: "x"})
+		assertRefusal(t, res, err, "protected space")
+		if fakeCalled(fake, editPath) {
+			t.Error("edit endpoint was called despite the resolved protected space")
+		}
+	})
+
+	t.Run("leading-zero resize prefix cannot bypass the resize guard", func(t *testing.T) {
+		// start 10.0.0.0, resize to "08": canonicalCIDR normalizes to 10.0.0.0/8,
+		// which equals the protected subnet, so the guard must fire.
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"network_start_hostaddr":"10.0.0.0","network_end_hostaddr":"10.0.0.255","space_name":"dev"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, _, err := subnetUpdateHandler(client, logger, g)(t.Context(), nil, SubnetUpdateInput{SubnetID: 7, Prefix: "08"})
+		assertRefusal(t, res, err, "protected subnet")
+		if fakeCalled(fake, editPath) {
+			t.Error("edit endpoint was called despite the leading-zero resize overlap")
+		}
+	})
+
+	t.Run("IPv4-invalid resize prefix fails closed", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"network_start_hostaddr":"10.0.0.0","network_end_hostaddr":"10.0.0.255","space_name":"dev"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.5.0.0/16"}}
+		res, _, err := subnetUpdateHandler(client, logger, g)(t.Context(), nil, SubnetUpdateInput{SubnetID: 7, Prefix: "128"})
+		assertRefusal(t, res, err, "not valid for subnet")
+		if fakeCalled(fake, editPath) {
+			t.Error("edit endpoint was called despite an unverifiable resize prefix")
 		}
 	})
 }

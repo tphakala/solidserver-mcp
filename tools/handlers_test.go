@@ -290,6 +290,18 @@ func handlerCases() []handlerCase {
 			res, out, err := dhcpRangeCreateHandler(c, l, nil)(ctx, nil, DhcpRangeCreateInput{Server: "dhcp1", Start: "192.0.2.10", End: "192.0.2.50"})
 			return res, out, err
 		}},
+		{"dhcp_scope_delete", "/api/v2.0/dhcp/scope/delete", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := dhcpScopeDeleteHandler(c, l, nil)(ctx, nil, DhcpScopeDeleteInput{Server: "dhcp1", Address: testSubnet})
+			return res, out, err
+		}},
+		{"dhcp_range_delete", "/api/v2.0/dhcp/range/delete", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := dhcpRangeDeleteHandler(c, l, nil)(ctx, nil, DhcpRangeDeleteInput{Server: "dhcp1", Start: "192.0.2.10", End: "192.0.2.50"})
+			return res, out, err
+		}},
+		{"subnet_update", "/api/v2.0/ipam/network/edit", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := subnetUpdateHandler(c, l, nil)(ctx, nil, SubnetUpdateInput{SubnetID: 1, Name: "lan-renamed"})
+			return res, out, err
+		}},
 	}
 }
 
@@ -331,6 +343,19 @@ func TestSubnetInfoResolvesByCIDR(t *testing.T) {
 			`{"data":[{"network_id":"1","network_start_hostaddr":"10.0.0.0","network_is_terminal":"1","network_size":"64"},{"network_id":"2","network_start_hostaddr":"10.0.0.0","network_is_terminal":"1","network_size":"32"}]}`)
 		res, _, err := subnetInfoHandler(client, l)(t.Context(), nil, SubnetInfoInput{CIDR: "10.0.0.0/24"})
 		assertRefusal(t, res, err, "matches 2 subnets")
+	})
+
+	t.Run("single candidate whose size contradicts the prefix is rejected", func(t *testing.T) {
+		// One row shares the start address but is a /25 (128 addresses), not the
+		// requested /24 (256). Returning it would resolve the wrong subnet, so the
+		// lookup must refuse rather than fetch its detail.
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"network_id":"42","network_start_hostaddr":"10.0.0.0","network_is_terminal":"1","network_size":"128"}]}`)
+		res, _, err := subnetInfoHandler(client, l)(t.Context(), nil, SubnetInfoInput{CIDR: "10.0.0.0/24"})
+		assertRefusal(t, res, err, "does not match /24")
+		if fakeCalled(fake, infoPath) {
+			t.Error("network/info was called despite the size mismatch")
+		}
 	})
 }
 
