@@ -24,7 +24,20 @@ type fakeAppliance struct {
 	mu       sync.Mutex
 	requests []recordedRequest
 
-	// status and body are what every request gets back.
+	// status and body are the default reply for any path without a per-path
+	// override in responses.
+	status int
+	body   string
+
+	// responses overrides the reply for specific API paths. A handler that makes
+	// more than one call (a resolve step then a mutation) can then get a body
+	// shaped like each endpoint, instead of decoding one global body as every
+	// response type. Empty by default, so callers that only set status/body are
+	// unaffected.
+	responses map[string]fakeResponse
+}
+
+type fakeResponse struct {
 	status int
 	body   string
 }
@@ -48,11 +61,15 @@ func newFakeAppliance(t *testing.T, status int, body string) (*services.APIClien
 			path:   r.URL.Path,
 			query:  r.URL.Query(),
 		})
+		status, body := fake.status, fake.body
+		if resp, ok := fake.responses[r.URL.Path]; ok {
+			status, body = resp.status, resp.body
+		}
 		fake.mu.Unlock()
 
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(fake.status)
-		_, _ = w.Write([]byte(fake.body))
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(fake.server.Close)
 
@@ -64,6 +81,68 @@ func newFakeAppliance(t *testing.T, status int, body string) (*services.APIClien
 		t.Fatalf("NewSolidServerClient: %v", err)
 	}
 	return client, fake
+}
+
+// setResponse overrides the reply for one API path, leaving every other path on
+// the default status/body. It lets a test whose handler makes a resolve call and
+// then a mutation return a body shaped like each endpoint, so the mutation does
+// not decode the resolve body as its own success type, and lets a resolve step
+// return an error status while the mutation stays healthy.
+func (f *fakeAppliance) setResponse(path string, status int, body string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.responses == nil {
+		f.responses = make(map[string]fakeResponse)
+	}
+	f.responses[path] = fakeResponse{status: status, body: body}
+}
+
+// resolveWhere finds the "where" query recorded for a request to path. The fake
+// ignores the query when choosing a response, so this is the only way a test can
+// pin that a resolve step scoped its filter correctly.
+func resolveWhere(t *testing.T, f *fakeAppliance, path string) string {
+	t.Helper()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.requests {
+		if r.path == path {
+			return r.query.Get("where")
+		}
+	}
+	t.Fatalf("no recorded request to %s", path)
+	return ""
+}
+
+// scopeRowsBody builds a dhcp/scope/list response body with n rows, to exercise
+// the truncation fail-closed path when a resolve fills the whole page.
+func scopeRowsBody(t *testing.T, n int) string {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString(`{"data":[`)
+	for i := range n {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"scope_net_addr":"192.0.2.0","scope_size":"256"}`)
+	}
+	b.WriteString(`]}`)
+	return b.String()
+}
+
+// staticRowsBody builds a dhcp/static/list response body with n rows, to exercise
+// the group guard's truncation fail-closed path.
+func staticRowsBody(t *testing.T, n int) string {
+	t.Helper()
+	var b strings.Builder
+	b.WriteString(`{"data":[`)
+	for i := range n {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(`{"static_addr":"192.0.2.50"}`)
+	}
+	b.WriteString(`]}`)
+	return b.String()
 }
 
 // lastPath returns the path of the most recent request, or "" if none.
@@ -300,6 +379,34 @@ func handlerCases() []handlerCase {
 		}},
 		{"subnet_update", "/api/v2.0/ipam/network/edit", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
 			res, out, err := subnetUpdateHandler(c, l, nil)(ctx, nil, SubnetUpdateInput{SubnetID: 1, Name: "lan-renamed"})
+			return res, out, err
+		}},
+		{"dhcp_shared_network_list", "/api/v2.0/dhcp/sharednetwork/list", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := dhcpSharedNetworkListHandler(c, l)(ctx, nil, DhcpSharedNetworkListInput{})
+			return res, out, err
+		}},
+		{"dhcp_shared_network_create", "/api/v2.0/dhcp/sharednetwork/add", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := dhcpSharedNetworkCreateHandler(c, l, nil)(ctx, nil, DhcpSharedNetworkCreateInput{Server: "dhcp1", Name: "campus"})
+			return res, out, err
+		}},
+		{"dhcp_shared_network_delete", "/api/v2.0/dhcp/sharednetwork/delete", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := dhcpSharedNetworkDeleteHandler(c, l, nil)(ctx, nil, DhcpSharedNetworkDeleteInput{Server: "dhcp1", Name: "campus"})
+			return res, out, err
+		}},
+		{"dhcp_group_list", "/api/v2.0/dhcp/group/list", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := dhcpGroupListHandler(c, l)(ctx, nil, DhcpGroupListInput{})
+			return res, out, err
+		}},
+		{"dhcp_group_create", "/api/v2.0/dhcp/group/add", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := dhcpGroupCreateHandler(c, l, nil)(ctx, nil, DhcpGroupCreateInput{Server: "dhcp1", Name: "printers"})
+			return res, out, err
+		}},
+		{"dhcp_group_delete", "/api/v2.0/dhcp/group/delete", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := dhcpGroupDeleteHandler(c, l, nil)(ctx, nil, DhcpGroupDeleteInput{Server: "dhcp1", Name: "printers"})
+			return res, out, err
+		}},
+		{"dhcp_static_list", "/api/v2.0/dhcp/static/list", func(ctx context.Context, c *services.APIClientWrapper) (*mcp.CallToolResult, any, error) {
+			res, out, err := dhcpStaticListHandler(c, l)(ctx, nil, DhcpStaticListInput{})
 			return res, out, err
 		}},
 	}
@@ -691,6 +798,16 @@ func TestHandlerInputValidationRejectsLocally(t *testing.T) {
 				return res, out, err
 			},
 			wantMsg: "same address family",
+		},
+		{
+			// Pins that dhcp_range_delete shares the endpoint validator with create,
+			// so the same reversed-range rejection holds on the delete path.
+			name: "dhcp_range_delete reversed range",
+			invoke: func() (*mcp.CallToolResult, any, error) {
+				res, out, err := dhcpRangeDeleteHandler(client, l, nil)(t.Context(), nil, DhcpRangeDeleteInput{Server: "dhcp1", Start: "192.0.2.50", End: "192.0.2.10"})
+				return res, out, err
+			},
+			wantMsg: "must not be before start",
 		},
 		{
 			name: "dns_record_update null byte in zone",

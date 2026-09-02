@@ -104,11 +104,20 @@ for the JSON-RPC channel. For HTTP transport, set `SOLIDSERVER_TRANSPORT=http` a
   - `solidserver_dhcp_server_list`: List DHCP servers.
   - `solidserver_dhcp_scope_list`: List DHCP scopes.
   - `solidserver_dhcp_scope_create`: Create a new DHCP scope.
+  - `solidserver_dhcp_scope_delete`: Delete a DHCP scope.
   - `solidserver_dhcp_range_list`: List DHCP ranges.
   - `solidserver_dhcp_range_create`: Create a new DHCP range within a scope.
+  - `solidserver_dhcp_range_delete`: Delete a DHCP range.
   - `solidserver_dhcp_lease_list`: List DHCP leases.
+  - `solidserver_dhcp_static_list`: List static DHCP reservations.
   - `solidserver_dhcp_static_add`: Add a static DHCP reservation.
   - `solidserver_dhcp_static_delete`: Delete a static DHCP reservation.
+  - `solidserver_dhcp_shared_network_list`: List DHCP shared networks.
+  - `solidserver_dhcp_shared_network_create`: Create a DHCP shared network.
+  - `solidserver_dhcp_shared_network_delete`: Delete a DHCP shared network (refuses when a member scope overlaps a protected subnet).
+  - `solidserver_dhcp_group_list`: List DHCP groups.
+  - `solidserver_dhcp_group_create`: Create a DHCP group.
+  - `solidserver_dhcp_group_delete`: Delete a DHCP group (refuses when a member reservation sits inside a protected subnet).
 - **Diagnostics**:
   - `solidserver_doctor`: Run preflight diagnostic checks against the appliance (DNS resolution, network reachability, TLS handshake, and API authentication).
 

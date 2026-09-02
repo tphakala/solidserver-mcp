@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/efficientip-labs/solidserver-go-client/sdsclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -316,6 +317,34 @@ func testReadOnlyDHCPRefusal(t *testing.T, g *Guardrails, logger *slog.Logger) {
 	t.Run("dhcp_range_delete refused", func(t *testing.T) {
 		res, _, err := dhcpRangeDeleteHandler(nil, logger, g)(t.Context(), &mcp.CallToolRequest{}, DhcpRangeDeleteInput{
 			Server: "dhcp1", Start: "192.168.1.10", End: "192.168.1.50",
+		})
+		assertReadOnlyError(t, res, err)
+	})
+
+	t.Run("dhcp_shared_network_create refused", func(t *testing.T) {
+		res, _, err := dhcpSharedNetworkCreateHandler(nil, logger, g)(t.Context(), &mcp.CallToolRequest{}, DhcpSharedNetworkCreateInput{
+			Server: "dhcp1", Name: "campus",
+		})
+		assertReadOnlyError(t, res, err)
+	})
+
+	t.Run("dhcp_shared_network_delete refused", func(t *testing.T) {
+		res, _, err := dhcpSharedNetworkDeleteHandler(nil, logger, g)(t.Context(), &mcp.CallToolRequest{}, DhcpSharedNetworkDeleteInput{
+			Server: "dhcp1", Name: "campus",
+		})
+		assertReadOnlyError(t, res, err)
+	})
+
+	t.Run("dhcp_group_create refused", func(t *testing.T) {
+		res, _, err := dhcpGroupCreateHandler(nil, logger, g)(t.Context(), &mcp.CallToolRequest{}, DhcpGroupCreateInput{
+			Server: "dhcp1", Name: "printers",
+		})
+		assertReadOnlyError(t, res, err)
+	})
+
+	t.Run("dhcp_group_delete refused", func(t *testing.T) {
+		res, _, err := dhcpGroupDeleteHandler(nil, logger, g)(t.Context(), &mcp.CallToolRequest{}, DhcpGroupDeleteInput{
+			Server: "dhcp1", Name: "printers",
 		})
 		assertReadOnlyError(t, res, err)
 	})
@@ -848,9 +877,12 @@ func TestDhcpScopeDeleteResolvesExtent(t *testing.T) {
 
 	t.Run("refuses a scope that encloses a protected subnet", func(t *testing.T) {
 		// Scope net address 10.0.0.0 is outside the protected 10.5.0.0/16, but the
-		// scope spans 10.0.0.0-10.255.255.255 and encloses it.
+		// scope spans 10.0.0.0-10.255.255.255 (size 2^24) and encloses it. The
+		// scope_*_address_addr fields carry the hexadecimal encoding the appliance
+		// actually returns, which the guard must ignore in favour of the dotted
+		// scope_net_addr + scope_size.
 		client, fake := newFakeAppliance(t, http.StatusOK,
-			`{"data":[{"scope_net_addr":"10.0.0.0","scope_start_address_addr":"10.0.0.0","scope_end_address_addr":"10.255.255.255"}]}`)
+			`{"data":[{"scope_net_addr":"10.0.0.0","scope_size":"16777216","scope_start_address_addr":"0a000000","scope_end_address_addr":"0affffff"}]}`)
 		g := &Guardrails{ProtectedSubnets: []string{"10.5.0.0/16"}}
 		res, _, err := dhcpScopeDeleteHandler(client, logger, g)(t.Context(), nil, DhcpScopeDeleteInput{Server: "dhcp1", Address: "10.0.0.0"})
 		assertRefusal(t, res, err, "overlapping protected subnet")
@@ -864,7 +896,7 @@ func TestDhcpScopeDeleteResolvesExtent(t *testing.T) {
 
 	t.Run("proceeds when the scope does not overlap", func(t *testing.T) {
 		client, fake := newFakeAppliance(t, http.StatusOK,
-			`{"data":[{"scope_net_addr":"192.0.2.0","scope_start_address_addr":"192.0.2.0","scope_end_address_addr":"192.0.2.255"}]}`)
+			`{"data":[{"scope_net_addr":"192.0.2.0","scope_size":"256"}]}`)
 		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
 		res, _, err := dhcpScopeDeleteHandler(client, logger, g)(t.Context(), nil, DhcpScopeDeleteInput{Server: "dhcp1", Address: "192.0.2.0"})
 		if err != nil {
@@ -873,23 +905,309 @@ func TestDhcpScopeDeleteResolvesExtent(t *testing.T) {
 		if res == nil || res.IsError {
 			t.Fatalf("expected success, got error result: %s", resultText(res))
 		}
-		if !fakeCalled(fake, listPath) || !fakeCalled(fake, deletePath) {
-			t.Errorf("expected scope/list then scope/delete, got %v", fake.paths())
+		if got := fake.paths(); len(got) != 2 || got[0] != listPath || got[1] != deletePath {
+			t.Errorf("expected scope/list then scope/delete in order, got %v", got)
 		}
 	})
 
-	t.Run("fails closed when a resolved scope has no extent", func(t *testing.T) {
-		// The scope row lacks an end address, so its span cannot be checked; the
-		// delete must be refused rather than proceed on an unverifiable extent.
+	t.Run("fails closed when a resolved scope has no derivable extent", func(t *testing.T) {
+		// The scope row carries no size or netmask, so its span cannot be derived
+		// from the dotted fields; the delete must be refused rather than proceed on
+		// an unverifiable extent.
 		client, fake := newFakeAppliance(t, http.StatusOK,
-			`{"data":[{"scope_net_addr":"192.0.2.0","scope_start_address_addr":"192.0.2.0"}]}`)
+			`{"data":[{"scope_net_addr":"192.0.2.0"}]}`)
 		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
 		res, _, err := dhcpScopeDeleteHandler(client, logger, g)(t.Context(), nil, DhcpScopeDeleteInput{Server: "dhcp1", Address: "192.0.2.0"})
-		assertRefusal(t, res, err, "resolved no address extent")
+		assertRefusal(t, res, err, "resolved no usable address extent")
 		if fakeCalled(fake, deletePath) {
 			t.Error("delete endpoint was called despite an unverifiable scope extent")
 		}
 	})
+}
+
+// TestDhcpSharedNetworkDeleteResolvesChildScopes covers the resolve-before-enforce
+// guard on shared_network_delete. A shared network has no address of its own, but
+// deleting it can take its member scopes with it, so the member scopes are
+// resolved from the appliance and the delete is refused when any overlaps a
+// protected subnet, and fails closed when a member scope has no usable extent.
+func TestDhcpSharedNetworkDeleteResolvesChildScopes(t *testing.T) {
+	const listPath = "/api/v2.0/dhcp/scope/list"
+	const deletePath = "/api/v2.0/dhcp/sharednetwork/delete"
+	logger := testLogger()
+
+	t.Run("refuses when a member scope overlaps a protected subnet", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"scope_net_addr":"10.5.0.0","scope_size":"256"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.5.0.0/16"}}
+		res, _, err := dhcpSharedNetworkDeleteHandler(client, logger, g)(t.Context(), nil, DhcpSharedNetworkDeleteInput{Server: "dhcp1", Name: "campus"})
+		assertRefusal(t, res, err, "overlaps protected subnet")
+		if fakeCalled(fake, deletePath) {
+			t.Error("delete endpoint was called despite a protected member scope")
+		}
+		if !fakeCalled(fake, listPath) {
+			t.Error("expected the member-scope lookup to run")
+		}
+	})
+
+	t.Run("proceeds when no member scope overlaps", func(t *testing.T) {
+		// Per-path fidelity: the scope/list resolve returns scope rows while the
+		// sharednetwork/delete returns a delete-success body, so the mutation does
+		// not decode the resolve body as its own success type.
+		client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[]}`)
+		fake.setResponse(listPath, http.StatusOK, `{"data":[{"scope_net_addr":"192.0.2.0","scope_size":"256"}]}`)
+		fake.setResponse(deletePath, http.StatusOK, `{"data":[{"sharednetwork_id":"7"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, out, err := dhcpSharedNetworkDeleteHandler(client, logger, g)(t.Context(), nil, DhcpSharedNetworkDeleteInput{Server: "dhcp1", Name: "campus"})
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if res == nil || res.IsError {
+			t.Fatalf("expected success, got error result: %s", resultText(res))
+		}
+		if got := fake.paths(); len(got) != 2 || got[0] != listPath || got[1] != deletePath {
+			t.Errorf("expected scope/list then sharednetwork/delete in order, got %v", got)
+		}
+		// Per-path fidelity: the mutation decodes the sharednetwork/delete body, not
+		// the scope/list resolve body it would otherwise share.
+		if len(out.Data) != 1 || out.Data[0].SharednetworkId == nil || *out.Data[0].SharednetworkId != "7" {
+			t.Errorf("delete result did not decode the sharednetwork/delete body: %+v", out.Data)
+		}
+	})
+}
+
+// TestDhcpSharedNetworkDeleteGuardEdgeCases covers the shared-network delete
+// guard's fail-closed and fail-open edges: an empty resolve (with a WHERE-filter
+// assertion the fake cannot otherwise pin), a failed member-scope resolve, a
+// member scope whose extent cannot be derived, and a member-scope page that
+// fills to the enumeration cap.
+func TestDhcpSharedNetworkDeleteGuardEdgeCases(t *testing.T) {
+	const listPath = "/api/v2.0/dhcp/scope/list"
+	const deletePath = "/api/v2.0/dhcp/sharednetwork/delete"
+	logger := testLogger()
+
+	t.Run("proceeds when the shared network has no member scopes", func(t *testing.T) {
+		// The resolve legitimately returns no rows, so there is nothing to protect
+		// and the delete proceeds. This exercises the empty-resolve branch a
+		// wrong WHERE filter would also hit, so it is paired with the WHERE check.
+		client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[]}`)
+		fake.setResponse(deletePath, http.StatusOK, `{"data":[{"sharednetwork_id":"9"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, _, err := dhcpSharedNetworkDeleteHandler(client, logger, g)(t.Context(), nil, DhcpSharedNetworkDeleteInput{Server: "dhcp1", Name: "campus"})
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if res == nil || res.IsError {
+			t.Fatalf("expected success, got error result: %s", resultText(res))
+		}
+		// Pin the resolve WHERE clause: the fake ignores it, so only this assertion
+		// catches a filter that matched zero rows in production and let a protected
+		// member scope slip through (fail-open).
+		where := resolveWhere(t, fake, listPath)
+		if !strings.Contains(where, "sharednetwork_name='campus'") || !strings.Contains(where, "server_name='dhcp1'") {
+			t.Errorf("resolve WHERE did not scope to the shared network and server: %q", where)
+		}
+	})
+
+	t.Run("fails closed when the resolve call errors", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[{"sharednetwork_id":"1"}]}`)
+		fake.setResponse(listPath, http.StatusInternalServerError, `{"errno":"1","errmsg":"boom"}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, _, err := dhcpSharedNetworkDeleteHandler(client, logger, g)(t.Context(), nil, DhcpSharedNetworkDeleteInput{Server: "dhcp1", Name: "campus"})
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if res == nil || !res.IsError {
+			t.Fatal("expected an error result when the resolve call fails")
+		}
+		if fakeCalled(fake, deletePath) {
+			t.Error("delete endpoint was called despite a failed member-scope resolve")
+		}
+	})
+
+	t.Run("fails closed when a member scope has no derivable extent", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK,
+			`{"data":[{"scope_net_addr":"192.0.2.0"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, _, err := dhcpSharedNetworkDeleteHandler(client, logger, g)(t.Context(), nil, DhcpSharedNetworkDeleteInput{Server: "dhcp1", Name: "campus"})
+		assertRefusal(t, res, err, "resolved no usable address extent")
+		if fakeCalled(fake, deletePath) {
+			t.Error("delete endpoint was called despite an unverifiable member scope")
+		}
+	})
+
+	t.Run("fails closed when the member-scope page is truncated at the cap", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK, scopeRowsBody(t, maxListLimit))
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, _, err := dhcpSharedNetworkDeleteHandler(client, logger, g)(t.Context(), nil, DhcpSharedNetworkDeleteInput{Server: "dhcp1", Name: "campus"})
+		assertRefusal(t, res, err, "more than can be enumerated")
+		if fakeCalled(fake, deletePath) {
+			t.Error("delete endpoint was called despite a truncated member-scope page")
+		}
+	})
+}
+
+// TestDhcpGroupDeleteResolvesChildStatics covers the resolve-before-enforce guard
+// on group_delete. A group has no address of its own, but deleting it can take
+// its member static reservations with it, so the reservations are resolved and
+// the delete is refused when any address sits inside a protected subnet, and
+// fails closed when a member reservation has no usable address.
+func TestDhcpGroupDeleteResolvesChildStatics(t *testing.T) {
+	const listPath = "/api/v2.0/dhcp/static/list"
+	const deletePath = "/api/v2.0/dhcp/group/delete"
+	logger := testLogger()
+
+	t.Run("refuses when a member reservation is inside a protected subnet", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[{"static_addr":"10.5.0.10"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.5.0.0/16"}}
+		res, _, err := dhcpGroupDeleteHandler(client, logger, g)(t.Context(), nil, DhcpGroupDeleteInput{Server: "dhcp1", Name: "printers"})
+		assertRefusal(t, res, err, "protected subnet")
+		if fakeCalled(fake, deletePath) {
+			t.Error("delete endpoint was called despite a protected member reservation")
+		}
+		if !fakeCalled(fake, listPath) {
+			t.Error("expected the member-reservation lookup to run")
+		}
+	})
+
+	t.Run("proceeds when no member reservation is protected", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[]}`)
+		fake.setResponse(listPath, http.StatusOK, `{"data":[{"static_addr":"192.0.2.50"}]}`)
+		fake.setResponse(deletePath, http.StatusOK, `{"data":[{"group_id":"3"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, out, err := dhcpGroupDeleteHandler(client, logger, g)(t.Context(), nil, DhcpGroupDeleteInput{Server: "dhcp1", Name: "printers"})
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if res == nil || res.IsError {
+			t.Fatalf("expected success, got error result: %s", resultText(res))
+		}
+		if !fakeCalled(fake, listPath) || !fakeCalled(fake, deletePath) {
+			t.Errorf("expected static/list then group/delete, got %v", fake.paths())
+		}
+		// Per-path fidelity: the mutation decodes the group/delete body, not the
+		// static/list resolve body it would otherwise share.
+		if len(out.Data) != 1 || out.Data[0].GroupId == nil || *out.Data[0].GroupId != "3" {
+			t.Errorf("delete result did not decode the group/delete body: %+v", out.Data)
+		}
+	})
+
+	t.Run("fails closed when a member reservation has no address", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[{"static_name":"noaddr"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, _, err := dhcpGroupDeleteHandler(client, logger, g)(t.Context(), nil, DhcpGroupDeleteInput{Server: "dhcp1", Name: "printers"})
+		assertRefusal(t, res, err, "resolved no usable address")
+		if fakeCalled(fake, deletePath) {
+			t.Error("delete endpoint was called despite an unverifiable member reservation")
+		}
+	})
+
+}
+
+// TestDhcpGroupDeleteGuardEdgeCases covers the group delete guard's edges: an
+// empty resolve (with a WHERE-filter assertion the fake cannot otherwise pin)
+// and a reservation page that fills to the enumeration cap.
+func TestDhcpGroupDeleteGuardEdgeCases(t *testing.T) {
+	const listPath = "/api/v2.0/dhcp/static/list"
+	const deletePath = "/api/v2.0/dhcp/group/delete"
+	logger := testLogger()
+
+	t.Run("proceeds when the group has no member reservations", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK, `{"data":[]}`)
+		fake.setResponse(deletePath, http.StatusOK, `{"data":[{"group_id":"5"}]}`)
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, _, err := dhcpGroupDeleteHandler(client, logger, g)(t.Context(), nil, DhcpGroupDeleteInput{Server: "dhcp1", Name: "printers"})
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		if res == nil || res.IsError {
+			t.Fatalf("expected success, got error result: %s", resultText(res))
+		}
+		// Pin the resolve WHERE, which the fake ignores: a filter that matched zero
+		// rows in production would fail open and only this assertion catches it.
+		where := resolveWhere(t, fake, listPath)
+		if !strings.Contains(where, "group_name='printers'") || !strings.Contains(where, "server_name='dhcp1'") {
+			t.Errorf("resolve WHERE did not scope to the group and server: %q", where)
+		}
+	})
+
+	t.Run("fails closed when the reservation page is truncated at the cap", func(t *testing.T) {
+		client, fake := newFakeAppliance(t, http.StatusOK, staticRowsBody(t, maxListLimit))
+		g := &Guardrails{ProtectedSubnets: []string{"10.0.0.0/8"}}
+		res, _, err := dhcpGroupDeleteHandler(client, logger, g)(t.Context(), nil, DhcpGroupDeleteInput{Server: "dhcp1", Name: "printers"})
+		assertRefusal(t, res, err, "more than can be enumerated")
+		if fakeCalled(fake, deletePath) {
+			t.Error("delete endpoint was called despite a truncated reservation page")
+		}
+	})
+}
+
+// TestScopeRowExtent pins the extent derivation at the heart of the scope and
+// shared-network delete guards: it must use the dotted scope_net_addr plus the
+// address count (scope_size, else scope_net_mask), never the hexadecimal
+// scope_*_address_addr fields, and must fail closed (empty) when the extent
+// cannot be derived.
+func TestScopeRowExtent(t *testing.T) {
+	sp := func(s string) *string { return &s }
+	tests := []struct {
+		name               string
+		row                sdsclient.DataInnerDhcpScopeData
+		wantStart, wantEnd string
+	}{
+		{
+			name:      "size-based extent",
+			row:       sdsclient.DataInnerDhcpScopeData{ScopeNetAddr: sp("10.0.0.0"), ScopeSize: sp("16777216")},
+			wantStart: "10.0.0.0", wantEnd: "10.255.255.255",
+		},
+		{
+			name:      "netmask fallback when size absent",
+			row:       sdsclient.DataInnerDhcpScopeData{ScopeNetAddr: sp("192.0.2.0"), ScopeNetMask: sp("255.255.255.0")},
+			wantStart: "192.0.2.0", wantEnd: "192.0.2.255",
+		},
+		{
+			// The hex fields deliberately encode a DIFFERENT range (10.0.0.0-
+			// 10.255.255.255) than the dotted net_addr + size derive (192.0.2.0/24),
+			// so the test fails if the code ever reads the hex fields at all, not
+			// only if it feeds them to netip.ParseAddr.
+			name: "hexadecimal address fields are ignored",
+			row: sdsclient.DataInnerDhcpScopeData{
+				ScopeNetAddr:          sp("192.0.2.0"),
+				ScopeSize:             sp("256"),
+				ScopeStartAddressAddr: sp("0a000000"),
+				ScopeEndAddressAddr:   sp("0affffff"),
+			},
+			wantStart: "192.0.2.0", wantEnd: "192.0.2.255",
+		},
+		{
+			name:      "no size or mask is underivable",
+			row:       sdsclient.DataInnerDhcpScopeData{ScopeNetAddr: sp("192.0.2.0")},
+			wantStart: "", wantEnd: "",
+		},
+		{
+			// A size larger than the 32-bit space must fail closed, not wrap the
+			// address arithmetic back to a small (bogus) end address.
+			name:      "oversized size fails closed",
+			row:       sdsclient.DataInnerDhcpScopeData{ScopeNetAddr: sp("192.0.2.0"), ScopeSize: sp("18446744073709551615")},
+			wantStart: "", wantEnd: "",
+		},
+		{
+			name:      "missing net address is underivable",
+			row:       sdsclient.DataInnerDhcpScopeData{ScopeSize: sp("256")},
+			wantStart: "", wantEnd: "",
+		},
+		{
+			name:      "non-IPv4 net address is underivable",
+			row:       sdsclient.DataInnerDhcpScopeData{ScopeNetAddr: sp("2001:db8::"), ScopeSize: sp("256")},
+			wantStart: "", wantEnd: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotStart, gotEnd := scopeRowExtent(&tt.row)
+			if gotStart != tt.wantStart || gotEnd != tt.wantEnd {
+				t.Errorf("scopeRowExtent = (%q, %q), want (%q, %q)", gotStart, gotEnd, tt.wantStart, tt.wantEnd)
+			}
+		})
+	}
 }
 
 // TestGuardrailPrefixCanonicalization covers the fail-open bypass a non-canonical
