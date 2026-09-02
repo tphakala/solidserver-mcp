@@ -596,7 +596,7 @@ func subnetUpdateHandler(client *services.APIClientWrapper, logger *slog.Logger,
 		// relevant protection is configured, resolve the subnet's real extent and
 		// space and re-check, so an edit cannot slip past a guardrail a create or
 		// delete would hit.
-		if guardrailsNeedAddressLookup(g) {
+		if client != nil && guardrailsNeedAddressLookup(g) {
 			if res := applySubnetUpdateProtections(ctx, client, logger, g, &in); res != nil {
 				return res, emptyOut, nil
 			}
