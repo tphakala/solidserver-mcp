@@ -55,6 +55,14 @@ type SubnetDeleteInput struct {
 	Address string `json:"address" jsonschema:"The start IP address of the subnet to delete."`
 }
 
+type SubnetUpdateInput struct {
+	SubnetID  int32  `json:"subnet_id" jsonschema:"Numeric subnet (network) ID from solidserver_subnet_list or solidserver_subnet_info."`
+	Name      string `json:"name,omitempty" jsonschema:"New name for the subnet. Omit to leave unchanged."`
+	Prefix    string `json:"prefix,omitempty" jsonschema:"New prefix length to resize the subnet to (e.g. '25'). Omit to leave the size unchanged. Growing a subnet can be rejected if the larger range would overlap a protected subnet or an existing neighbour."`
+	ClassName string `json:"class_name,omitempty" jsonschema:"New class to apply, as 'directory/name.class' (reclassify). Omit to leave unchanged."`
+	Space     string `json:"space,omitempty" jsonschema:"IPAM space name, used only for the protected-space guardrail."`
+}
+
 // Subnet Output Structs
 type SubnetListOut = ListOutput[sdsclient.DataInnerIpamNetworkData]
 
@@ -68,6 +76,10 @@ type SubnetCreateOut struct {
 
 type SubnetDeleteOut struct {
 	Data []sdsclient.DataInnerIpamNetworkDeleteSuccess `json:"data" jsonschema:"Deleted subnet response records."`
+}
+
+type SubnetUpdateOut struct {
+	Data []sdsclient.DataInnerIpamNetworkEditSuccess `json:"data" jsonschema:"Updated subnet response records."`
 }
 
 type SpaceListOut = ListOutput[sdsclient.DataInnerIpamSpaceData]
@@ -126,6 +138,19 @@ func RegisterSubnetTools(s *mcp.Server, client *services.APIClientWrapper, logge
 			"that is still in use loses the record of which hosts held which addresses. Returns a " +
 			"confirmation message.",
 	}, subnetDeleteHandler(client, logger, g))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_subnet_update",
+		Title:       "Update a subnet",
+		Annotations: additiveTool("Update a subnet"),
+		Description: "Edits an existing subnet in place, identified by its numeric ID from " +
+			"solidserver_subnet_list or solidserver_subnet_info. Renames it, resizes it to a new " +
+			"prefix, or reclassifies it, without the delete-and-recreate that would change its identity " +
+			"and lose the addresses tracked inside it. Set only the fields you want to change; omitted " +
+			"fields are left as they are. A resize that grows the subnet can be rejected if the larger " +
+			"range would overlap a protected subnet or an existing neighbour. Changes appliance state. " +
+			"Returns the updated subnet as JSON.",
+	}, subnetUpdateHandler(client, logger, g))
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "solidserver_space_list",
@@ -235,6 +260,13 @@ func resolveSubnetIDByCIDR(ctx context.Context, client *services.APIClientWrappe
 	case 0:
 		return 0, errorResult("no terminal subnet found for cidr %s; use solidserver_subnet_list to search", cidr)
 	case 1:
+		// A lone row matches only on start address; the size filter above runs
+		// only when more than one row competes. Reject a single candidate whose
+		// size contradicts the requested prefix so a /24 lookup cannot silently
+		// resolve to a /25 that happens to share the start address.
+		if want, ok := expectedNetworkSize(prefix); ok && matched[0].NetworkSize != nil && *matched[0].NetworkSize != want {
+			return 0, errorResult("no terminal subnet found for cidr %s: a subnet starts at %s but its size does not match /%d; use solidserver_subnet_list to search", cidr, startAddr, prefix.Bits())
+		}
 		if matched[0].NetworkId == nil {
 			return 0, errorResult("subnet for cidr %s has no id; use solidserver_subnet_list", cidr)
 		}
@@ -248,6 +280,19 @@ func resolveSubnetIDByCIDR(ctx context.Context, client *services.APIClientWrappe
 	}
 }
 
+// expectedNetworkSize returns the SolidServer network_size string for a prefix
+// (the count of addresses it contains) and whether that count is computable. It
+// is not computable for prefixes with more than 63 host bits, where the count
+// overflows a uint64; callers treat "not computable" as "cannot disambiguate by
+// size" rather than guessing.
+func expectedNetworkSize(prefix netip.Prefix) (string, bool) {
+	hostBits := prefix.Addr().BitLen() - prefix.Bits()
+	if hostBits < 0 || hostBits > 63 {
+		return "", false
+	}
+	return strconv.FormatUint(uint64(1)<<uint(hostBits), 10), true
+}
+
 // disambiguateSubnetsBySize narrows candidate subnets that share a start address
 // to those whose address count matches the requested prefix (usually one). When
 // the count cannot be computed (IPv6 prefixes wider than a uint64 can hold) or
@@ -257,11 +302,10 @@ func disambiguateSubnetsBySize(rows []sdsclient.DataInnerIpamNetworkData, prefix
 	if len(rows) <= 1 {
 		return rows
 	}
-	hostBits := prefix.Addr().BitLen() - prefix.Bits()
-	if hostBits < 0 || hostBits > 63 {
+	want, ok := expectedNetworkSize(prefix)
+	if !ok {
 		return rows
 	}
-	want := strconv.FormatUint(uint64(1)<<uint(hostBits), 10)
 	out := make([]sdsclient.DataInnerIpamNetworkData, 0, len(rows))
 	for i := range rows {
 		if rows[i].NetworkSize != nil && *rows[i].NetworkSize == want {
@@ -319,8 +363,7 @@ func checkSubnetCreateGuardrails(g *Guardrails, in *SubnetCreateInput) error {
 		return err
 	}
 	if in.Address != "" && in.Prefix != "" {
-		cidr := in.Address + "/" + in.Prefix
-		return g.CheckProtectedSubnet(cidr)
+		return g.CheckProtectedSubnetCIDR(in.Address, in.Prefix)
 	}
 	return g.CheckProtectedSubnet(in.Address)
 }
@@ -396,6 +439,14 @@ func subnetDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger,
 			return validationErrorResult(err, emptyOut)
 		}
 
+		// The bare-address check above catches deleting a subnet that equals or
+		// sits inside a protected one, but not a larger terminal subnet that
+		// encloses a smaller protected subnet (its start address lies outside the
+		// protected range). Resolve the target's real extent and re-check.
+		if res := applySubnetDeleteExtentProtection(ctx, client, logger, g, in.Space, in.Address); res != nil {
+			return res, emptyOut, nil
+		}
+
 		logger.Info("deleting subnet", "address", in.Address, "space", in.Space)
 		authCtx := client.AuthContext(ctx)
 		req := client.IpamAPI.IpamNetworkDelete(authCtx).
@@ -418,6 +469,230 @@ func subnetDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger,
 		out := SubnetDeleteOut{Data: data}
 		return jsonResult(out), out, nil
 	}
+}
+
+func validateSubnetUpdateInput(in *SubnetUpdateInput) error {
+	if err := ValidatePositiveInt32(in.SubnetID, "subnet_id"); err != nil {
+		return err
+	}
+	if err := ValidateOptionalString(in.Name, "name"); err != nil {
+		return err
+	}
+	if err := ValidateOptionalString(in.ClassName, "class_name"); err != nil {
+		return err
+	}
+	if err := ValidateOptionalString(in.Space, "space"); err != nil {
+		return err
+	}
+	if p := strings.TrimSpace(in.Prefix); p != "" {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 || n > 128 {
+			return fmt.Errorf("prefix %q must be an integer between 0 and 128", in.Prefix)
+		}
+	}
+	if in.Name == "" && strings.TrimSpace(in.Prefix) == "" && in.ClassName == "" {
+		return fmt.Errorf("no fields to update: set name, prefix, or class_name")
+	}
+	return nil
+}
+
+func buildIpamNetworkEditInput(in *SubnetUpdateInput) sdsclient.IpamNetworkEditInput {
+	input := sdsclient.IpamNetworkEditInput{NetworkId: &in.SubnetID}
+	if in.Name != "" {
+		input.NetworkName = &in.Name
+	}
+	if p := strings.TrimSpace(in.Prefix); p != "" {
+		input.NetworkPrefix = &p
+	}
+	if in.ClassName != "" {
+		input.NetworkClassName = &in.ClassName
+	}
+	return input
+}
+
+// lookupSubnetExtentByID resolves a subnet (network) ID to its first and last
+// address and its space. The update tool receives only the numeric id, so this
+// is how a protected-subnet or protected-space rule is evaluated against the
+// real object before the edit runs.
+func lookupSubnetExtentByID(ctx context.Context, client *services.APIClientWrapper, logger *slog.Logger, networkID int32) (start, end, space string, errResult *mcp.CallToolResult) {
+	authCtx := client.AuthContext(ctx)
+	resp, httpResp, apiErr := client.IpamAPI.IpamNetworkInfo(authCtx).NetworkId(networkID).Execute()
+	closeBody(httpResp)
+	if apiErr != nil {
+		logger.Error("API error", "tool", "solidserver_subnet_update", "error", apiErr)
+		return "", "", "", apiErrorResult(apiErr, httpResp)
+	}
+	if resp == nil || len(resp.Data) == 0 {
+		return "", "", "", errorResult("subnet_id %d not found", networkID)
+	}
+	row := resp.Data[0]
+	if row.NetworkStartHostaddr != nil {
+		start = *row.NetworkStartHostaddr
+	}
+	if row.NetworkEndHostaddr != nil {
+		end = *row.NetworkEndHostaddr
+	}
+	if row.SpaceName != nil {
+		space = *row.SpaceName
+	}
+	return start, end, space, nil
+}
+
+// applySubnetUpdateProtections resolves the target subnet and refuses the edit
+// if it touches a protected object. It checks the pre-edit extent (so a subnet
+// that is or encloses a protected subnet cannot be modified) and, when the edit
+// resizes, the post-edit CIDR (so a grow cannot newly swallow an adjacent
+// protected subnet). It fails closed when a configured protection cannot be
+// verified because the lookup returned no extent or space.
+func applySubnetUpdateProtections(ctx context.Context, client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails, in *SubnetUpdateInput) *mcp.CallToolResult {
+	start, end, space, errResult := lookupSubnetExtentByID(ctx, client, logger, in.SubnetID)
+	if errResult != nil {
+		return errResult
+	}
+	if len(g.ProtectedSubnets) > 0 && (start == "" || end == "") {
+		return errorResult("cannot verify protected-subnet rules: subnet_id %d resolved no address extent", in.SubnetID)
+	}
+	if p, ok := g.overlappingProtectedSubnet(start, end); ok {
+		return errorResult("cannot modify subnet %q-%q overlapping protected subnet %q", start, end, p)
+	}
+	if prefix := strings.TrimSpace(in.Prefix); prefix != "" && start != "" {
+		// Build the resized CIDR through canonicalCIDR so a non-canonical ("08")
+		// or family-invalid ("/128" on IPv4) prefix cannot make CheckProtectedSubnet
+		// parse-fail and fall open. Validation already accepted the prefix as an
+		// integer, so an unresolvable one here fails closed.
+		cidr, ok := canonicalCIDR(start, prefix)
+		if !ok {
+			return errorResult("cannot verify resize: prefix %q is not valid for subnet %s", prefix, start)
+		}
+		if err := g.CheckProtectedSubnet(cidr); err != nil {
+			return errorResult("%v", err)
+		}
+	}
+	if len(g.ProtectedSpaces) > 0 && space == "" {
+		return errorResult("cannot verify protected-space rules: subnet_id %d resolved no space", in.SubnetID)
+	}
+	if err := g.CheckProtectedSpace(space); err != nil {
+		return errorResult("%v", err)
+	}
+	return nil
+}
+
+func subnetUpdateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, SubnetUpdateInput) (*mcp.CallToolResult, SubnetUpdateOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in SubnetUpdateInput) (*mcp.CallToolResult, SubnetUpdateOut, error) {
+		emptyOut := SubnetUpdateOut{Data: make([]sdsclient.DataInnerIpamNetworkEditSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := g.CheckProtectedSpace(in.Space); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		if err := validateSubnetUpdateInput(&in); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+
+		// The tool receives only the numeric subnet_id, so protected-subnet and
+		// protected-space rules cannot be evaluated from the input alone. When a
+		// relevant protection is configured, resolve the subnet's real extent and
+		// space and re-check, so an edit cannot slip past a guardrail a create or
+		// delete would hit.
+		if guardrailsNeedAddressLookup(g) {
+			if res := applySubnetUpdateProtections(ctx, client, logger, g, &in); res != nil {
+				return res, emptyOut, nil
+			}
+		}
+
+		logger.Info("updating subnet", "subnet_id", in.SubnetID)
+		input := buildIpamNetworkEditInput(&in)
+
+		authCtx := client.AuthContext(ctx)
+		req := client.IpamAPI.IpamNetworkEdit(authCtx).IpamNetworkEditInput(input)
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
+		if err != nil {
+			logger.Error("API error", "tool", "solidserver_subnet_update", "error", err)
+			return apiErrorResult(err, httpResp), emptyOut, nil
+		}
+
+		var data []sdsclient.DataInnerIpamNetworkEditSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerIpamNetworkEditSuccess, 0)
+		}
+		out := SubnetUpdateOut{Data: data}
+		return jsonResult(out), out, nil
+	}
+}
+
+// lookupSubnetExtents resolves every network starting at the given address (and
+// space) to its first and last address, so a delete that names only the start
+// address can be checked for enclosing a protected subnet. The delete API
+// (IpamNetworkDelete by space+address) is not restricted to terminal subnets,
+// so this lookup is not either: a non-terminal block network that shares the
+// start address and encloses a protected subnet must be considered too. All
+// matches are returned; the caller refuses if any overlaps a protected subnet
+// (fail-closed over-refusal is safe here). A miss returns no extents and a nil
+// error: nothing to protect and the delete itself reports the miss.
+func lookupSubnetExtents(ctx context.Context, client *services.APIClientWrapper, logger *slog.Logger, space, address string) ([]addrExtent, *mcp.CallToolResult) {
+	startAddr, err := netip.ParseAddr(strings.TrimSpace(address))
+	if err != nil {
+		// Unparseable address is left to validation; nothing to resolve.
+		return nil, nil
+	}
+	fixed := fmt.Sprintf("network_start_hostaddr='%s'", EscapeWhereValue(startAddr.String()))
+	if space != "" {
+		fixed = fmt.Sprintf("%s AND site_name='%s'", fixed, EscapeWhereValue(space))
+	}
+	authCtx := client.AuthContext(ctx)
+	resp, httpResp, apiErr := client.IpamAPI.IpamNetworkList(authCtx).Where(fixed).Limit(maxListLimit).Execute()
+	closeBody(httpResp)
+	if apiErr != nil {
+		logger.Error("API error", "tool", "solidserver_subnet_delete", "error", apiErr)
+		return nil, apiErrorResult(apiErr, httpResp)
+	}
+	if resp == nil || len(resp.Data) == 0 {
+		return nil, nil
+	}
+	extents := make([]addrExtent, 0, len(resp.Data))
+	for i := range resp.Data {
+		row := resp.Data[i]
+		var start, end string
+		if row.NetworkStartHostaddr != nil {
+			start = *row.NetworkStartHostaddr
+		}
+		if row.NetworkEndHostaddr != nil {
+			end = *row.NetworkEndHostaddr
+		}
+		extents = append(extents, addrExtent{start: start, end: end})
+	}
+	return extents, nil
+}
+
+// applySubnetDeleteExtentProtection refuses a subnet delete when any network at
+// the target address encloses or overlaps a protected subnet, closing the gap
+// left by the bare-address check in the caller. It is a no-op (returns nil) when
+// no protected subnets are configured or there is no client to resolve with, so
+// the caller can invoke it unconditionally.
+func applySubnetDeleteExtentProtection(ctx context.Context, client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails, space, address string) *mcp.CallToolResult {
+	if client == nil || g == nil || len(g.ProtectedSubnets) == 0 {
+		return nil
+	}
+	extents, errResult := lookupSubnetExtents(ctx, client, logger, space, address)
+	if errResult != nil {
+		return errResult
+	}
+	for _, e := range extents {
+		// A resolved network with no usable extent cannot be checked; fail closed
+		// rather than let an unverifiable delete through (matching subnet_update).
+		if e.start == "" || e.end == "" {
+			return errorResult("cannot verify protected-subnet rules: a subnet at %q resolved no address extent", address)
+		}
+		if p, ok := g.overlappingProtectedSubnet(e.start, e.end); ok {
+			return errorResult("cannot delete subnet %q-%q overlapping protected subnet %q", e.start, e.end, p)
+		}
+	}
+	return nil
 }
 
 func spaceCreateHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, SpaceCreateInput) (*mcp.CallToolResult, SpaceCreateOut, error) {

@@ -67,6 +67,17 @@ type DhcpRangeCreateInput struct {
 	Name   string `json:"name,omitempty" jsonschema:"An optional name for the range."`
 }
 
+type DhcpScopeDeleteInput struct {
+	Server  string `json:"server" jsonschema:"The name of the DHCP server the scope is on."`
+	Address string `json:"address" jsonschema:"The IPv4 network address of the scope to delete (e.g. '10.0.0.0')."`
+}
+
+type DhcpRangeDeleteInput struct {
+	Server string `json:"server" jsonschema:"The name of the DHCP server the range is on."`
+	Start  string `json:"start" jsonschema:"The first IP address of the range to delete."`
+	End    string `json:"end" jsonschema:"The last IP address of the range to delete."`
+}
+
 // DHCP Output Structs
 type DhcpServerListOut = ListOutput[sdsclient.DataInnerDhcpServerData]
 type DhcpScopeListOut = ListOutput[sdsclient.DataInnerDhcpScopeData]
@@ -87,6 +98,14 @@ type DhcpScopeCreateOut struct {
 
 type DhcpRangeCreateOut struct {
 	Data []sdsclient.DataInnerDhcpRangeAddSuccess `json:"data" jsonschema:"Created DHCP range response records."`
+}
+
+type DhcpScopeDeleteOut struct {
+	Data []sdsclient.DataInnerDhcpScopeDeleteSuccess `json:"data" jsonschema:"Deleted DHCP scope response records."`
+}
+
+type DhcpRangeDeleteOut struct {
+	Data []sdsclient.DataInnerDhcpRangeDeleteSuccess `json:"data" jsonschema:"Deleted DHCP range response records."`
 }
 
 // RegisterDhcpTools registers DHCP management tools.
@@ -184,6 +203,31 @@ func RegisterDhcpTools(s *mcp.Server, client *services.APIClientWrapper, logger 
 			"solidserver_dhcp_range_list first to avoid an overlap. Changes appliance state. Returns " +
 			"the created range as JSON.",
 	}, dhcpRangeCreateHandler(client, logger, g))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_dhcp_scope_delete",
+		Title:       "Delete a DHCP scope",
+		Annotations: destructiveTool("Delete a DHCP scope"),
+		Description: "Permanently removes a DHCP scope from a server, identified by the server name and " +
+			"the scope's IPv4 network address. This is destructive and cannot be undone from this " +
+			"server; deleting a scope also removes the ranges and options configured inside it, so the " +
+			"server stops serving that subnet. Audit what the scope contains with " +
+			"solidserver_dhcp_range_list first. The scope's real size is resolved from the appliance so " +
+			"the deletion is checked against protected-subnet rules for its whole range. Returns a " +
+			"confirmation message.",
+	}, dhcpScopeDeleteHandler(client, logger, g))
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name:        "solidserver_dhcp_range_delete",
+		Title:       "Delete a DHCP range",
+		Annotations: destructiveTool("Delete a DHCP range"),
+		Description: "Permanently removes a dynamic address range from a DHCP server, identified by the " +
+			"server name and the range's start and end addresses. This is destructive and cannot be " +
+			"undone from this server; once removed, DHCP no longer allocates from that pool and clients " +
+			"holding leases in it fall back to another range or stop being served when their lease " +
+			"expires. Confirm the boundaries with solidserver_dhcp_range_list first. Returns a " +
+			"confirmation message.",
+	}, dhcpRangeDeleteHandler(client, logger, g))
 }
 
 // ipv4MaskBits is the total bit width of an IPv4 mask.
@@ -351,7 +395,7 @@ func dhcpScopeCreateHandler(client *services.APIClientWrapper, logger *slog.Logg
 		if err := g.CheckReadOnly(); err != nil {
 			return errorResult("%v", err), emptyOut, nil
 		}
-		if err := g.CheckProtectedSubnet(address + "/" + prefix); err != nil {
+		if err := g.CheckProtectedSubnetCIDR(address, prefix); err != nil {
 			return errorResult("%v", err), emptyOut, nil
 		}
 
@@ -475,6 +519,190 @@ func dhcpRangeCreateHandler(client *services.APIClientWrapper, logger *slog.Logg
 		out := DhcpRangeCreateOut{Data: data}
 		return jsonResult(out), out, nil
 	}
+}
+
+func dhcpScopeDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, DhcpScopeDeleteInput) (*mcp.CallToolResult, DhcpScopeDeleteOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpScopeDeleteInput) (*mcp.CallToolResult, DhcpScopeDeleteOut, error) {
+		emptyOut := DhcpScopeDeleteOut{Data: make([]sdsclient.DataInnerDhcpScopeDeleteSuccess, 0)}
+
+		address := strings.TrimSpace(in.Address)
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		// Cheap first pass: catches deleting a scope whose network address sits
+		// inside a protected subnet, without a lookup. The delete API identifies
+		// the scope by server + net address only (no prefix), so the scope's real
+		// size is unknown from the input; the enclosing case is handled by
+		// resolving the true extent below.
+		if err := g.CheckProtectedSubnet(address); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+
+		if err := ValidateRequiredString(in.Server, "server"); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+		if err := ValidateIPv4(address, "address"); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+
+		// Resolve the scope's real extent from the appliance and refuse if it
+		// encloses or overlaps a protected subnet. A caller-supplied prefix could
+		// be narrowed to dodge this, so the size is taken from the appliance, not
+		// the input.
+		if res := applyDhcpScopeDeleteExtentProtection(ctx, client, logger, g, in.Server, address); res != nil {
+			return res, emptyOut, nil
+		}
+
+		logger.Info("deleting DHCP scope", "server", in.Server, "address", address)
+		authCtx := client.AuthContext(ctx)
+		req := client.DhcpAPI.DhcpScopeDelete(authCtx).
+			ServerName(in.Server).
+			ScopeNetAddr(address)
+
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
+		if err != nil {
+			logger.Error("API error", "tool", "solidserver_dhcp_scope_delete", "error", err)
+			return apiErrorResult(err, httpResp), emptyOut, nil
+		}
+
+		var data []sdsclient.DataInnerDhcpScopeDeleteSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerDhcpScopeDeleteSuccess, 0)
+		}
+		out := DhcpScopeDeleteOut{Data: data}
+		return jsonResult(out), out, nil
+	}
+}
+
+// applyDhcpScopeDeleteExtentProtection refuses a scope delete when any scope at
+// (server, netAddr) encloses or overlaps a protected subnet. It is a no-op
+// (returns nil) when no protected subnets are configured or there is no client,
+// so the caller can invoke it unconditionally.
+func applyDhcpScopeDeleteExtentProtection(ctx context.Context, client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails, server, netAddr string) *mcp.CallToolResult {
+	if client == nil || g == nil || len(g.ProtectedSubnets) == 0 {
+		return nil
+	}
+	extents, errResult := lookupDhcpScopeExtents(ctx, client, logger, server, netAddr)
+	if errResult != nil {
+		return errResult
+	}
+	for _, e := range extents {
+		// A resolved scope with no usable extent cannot be checked; fail closed
+		// rather than let an unverifiable delete through (matching subnet_update).
+		if e.start == "" || e.end == "" {
+			return errorResult("cannot verify protected-subnet rules: a scope at %q resolved no address extent", netAddr)
+		}
+		if p, ok := g.overlappingProtectedSubnet(e.start, e.end); ok {
+			return errorResult("cannot delete scope %q-%q overlapping protected subnet %q", e.start, e.end, p)
+		}
+	}
+	return nil
+}
+
+// lookupDhcpScopeExtents returns the inclusive [start, end] extents of the
+// scopes matching (server, netAddr). A (server, netAddr) pair is normally one
+// scope, but all matches are returned so every candidate the delete could hit
+// is checked. A miss returns no extents and a nil error: nothing to protect and
+// the delete itself reports the miss.
+func lookupDhcpScopeExtents(ctx context.Context, client *services.APIClientWrapper, logger *slog.Logger, server, netAddr string) ([]addrExtent, *mcp.CallToolResult) {
+	fixed := fmt.Sprintf("scope_net_addr='%s' AND server_name='%s'", EscapeWhereValue(netAddr), EscapeWhereValue(server))
+	authCtx := client.AuthContext(ctx)
+	resp, httpResp, apiErr := client.DhcpAPI.DhcpScopeList(authCtx).Where(fixed).Limit(maxListLimit).Execute()
+	closeBody(httpResp)
+	if apiErr != nil {
+		logger.Error("API error", "tool", "solidserver_dhcp_scope_delete", "error", apiErr)
+		return nil, apiErrorResult(apiErr, httpResp)
+	}
+	if resp == nil || len(resp.Data) == 0 {
+		return nil, nil
+	}
+	extents := make([]addrExtent, 0, len(resp.Data))
+	for i := range resp.Data {
+		row := resp.Data[i]
+		start := ""
+		switch {
+		case row.ScopeStartAddressAddr != nil:
+			start = *row.ScopeStartAddressAddr
+		case row.ScopeNetAddr != nil:
+			start = *row.ScopeNetAddr
+		}
+		end := ""
+		if row.ScopeEndAddressAddr != nil {
+			end = *row.ScopeEndAddressAddr
+		}
+		extents = append(extents, addrExtent{start: start, end: end})
+	}
+	return extents, nil
+}
+
+func dhcpRangeDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, DhcpRangeDeleteInput) (*mcp.CallToolResult, DhcpRangeDeleteOut, error) {
+	return func(ctx context.Context, request *mcp.CallToolRequest, in DhcpRangeDeleteInput) (*mcp.CallToolResult, DhcpRangeDeleteOut, error) {
+		emptyOut := DhcpRangeDeleteOut{Data: make([]sdsclient.DataInnerDhcpRangeDeleteSuccess, 0)}
+
+		if err := g.CheckReadOnly(); err != nil {
+			return errorResult("%v", err), emptyOut, nil
+		}
+		// The range can start outside every protected subnet yet span into one, so
+		// guard the whole [start, end] interval, not just the start address.
+		if p, ok := g.overlappingProtectedSubnet(in.Start, in.End); ok {
+			return errorResult("cannot delete a range %q-%q overlapping protected subnet %q", in.Start, in.End, p), emptyOut, nil
+		}
+
+		if err := validateDhcpRangeDeleteInput(&in); err != nil {
+			return validationErrorResult(err, emptyOut)
+		}
+
+		logger.Info("deleting DHCP range", "server", in.Server, "start", in.Start, "end", in.End)
+		authCtx := client.AuthContext(ctx)
+		req := client.DhcpAPI.DhcpRangeDelete(authCtx).
+			ServerName(in.Server).
+			RangeStartAddr(in.Start).
+			RangeEndAddr(in.End)
+
+		resp, httpResp, err := req.Execute()
+		closeBody(httpResp)
+		if err != nil {
+			logger.Error("API error", "tool", "solidserver_dhcp_range_delete", "error", err)
+			return apiErrorResult(err, httpResp), emptyOut, nil
+		}
+
+		var data []sdsclient.DataInnerDhcpRangeDeleteSuccess
+		if resp != nil && resp.Data != nil {
+			data = resp.Data
+		} else {
+			data = make([]sdsclient.DataInnerDhcpRangeDeleteSuccess, 0)
+		}
+		out := DhcpRangeDeleteOut{Data: data}
+		return jsonResult(out), out, nil
+	}
+}
+
+// validateDhcpRangeDeleteInput mirrors validateDhcpRangeCreateInput: both
+// endpoints must be valid same-family addresses forming a non-reversed range,
+// so the delete targets one coherent interval the appliance can describe.
+func validateDhcpRangeDeleteInput(in *DhcpRangeDeleteInput) error {
+	if err := ValidateRequiredString(in.Server, "server"); err != nil {
+		return err
+	}
+	if err := ValidateIP(in.Start, "start"); err != nil {
+		return err
+	}
+	if err := ValidateIP(in.End, "end"); err != nil {
+		return err
+	}
+	start, _ := netip.ParseAddr(strings.TrimSpace(in.Start))
+	end, _ := netip.ParseAddr(strings.TrimSpace(in.End))
+	if start.Is4() != end.Is4() {
+		return fmt.Errorf("start %q and end %q must be the same address family", in.Start, in.End)
+	}
+	if end.Less(start) {
+		return fmt.Errorf("range end %q must not be before start %q", in.End, in.Start)
+	}
+	return nil
 }
 
 func dhcpStaticDeleteHandler(client *services.APIClientWrapper, logger *slog.Logger, g *Guardrails) func(context.Context, *mcp.CallToolRequest, DhcpStaticDeleteInput) (*mcp.CallToolResult, DhcpStaticDeleteOut, error) {

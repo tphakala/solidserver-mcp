@@ -51,21 +51,23 @@ func (g *Guardrails) CheckProtectedZone(zone string) error {
 	return nil
 }
 
-// CheckProtectedRange returns an error if the inclusive address range
-// [start, end] overlaps any protected subnet. A single-endpoint check is not
-// enough for a range: a range can start outside every protected subnet yet hand
-// out addresses inside one, so both endpoints and any protected subnet enclosed
-// between them must be considered. Unparseable input is left to validation
-// (returns nil), matching CheckProtectedSubnet.
-func (g *Guardrails) CheckProtectedRange(start, end string) error {
+// overlappingProtectedSubnet reports the first protected subnet that the
+// inclusive address range [start, end] overlaps, if any. A single-endpoint
+// check is not enough: a range can start outside every protected subnet yet
+// span one, so both endpoints and any protected subnet enclosed between them
+// must be considered. This is the shared core behind both the range-creation
+// guard and the resolve-before-enforce checks that delete or resize an existing
+// object, whose own extent can enclose a smaller protected subnet a bare-address
+// check would miss. Unparseable input is treated as no overlap (left to
+// validation), matching CheckProtectedSubnet.
+func (g *Guardrails) overlappingProtectedSubnet(start, end string) (string, bool) {
 	if g == nil || len(g.ProtectedSubnets) == 0 {
-		return nil
+		return "", false
 	}
 	lo, _ := netip.ParseAddr(strings.TrimSpace(start))
 	hi, _ := netip.ParseAddr(strings.TrimSpace(end))
 	if !lo.IsValid() || !hi.IsValid() {
-		// Unparseable input is left to validation.
-		return nil
+		return "", false
 	}
 	if hi.Less(lo) {
 		lo, hi = hi, lo
@@ -79,10 +81,32 @@ func (g *Guardrails) CheckProtectedRange(start, end string) error {
 		// Overlap iff an endpoint sits inside the protected subnet, or the
 		// subnet's first address sits inside the range (subnet enclosed by it).
 		if prot.Contains(lo) || prot.Contains(hi) || (lo.Compare(first) <= 0 && first.Compare(hi) <= 0) {
-			return fmt.Errorf("cannot create a range %q-%q overlapping protected subnet %q", start, end, p)
+			return p, true
 		}
 	}
+	return "", false
+}
+
+// CheckProtectedRange returns an error if the inclusive address range
+// [start, end] overlaps any protected subnet, for a range-creation operation.
+func (g *Guardrails) CheckProtectedRange(start, end string) error {
+	if p, ok := g.overlappingProtectedSubnet(start, end); ok {
+		return fmt.Errorf("cannot create a range %q-%q overlapping protected subnet %q", start, end, p)
+	}
 	return nil
+}
+
+// CheckProtectedSubnetCIDR runs the protected-subnet guard for an object given
+// by a start address and prefix-length string, normalizing through canonicalCIDR
+// so a non-canonical ("08") or family-invalid ("/128" on IPv4) prefix cannot
+// make the underlying netip.ParsePrefix fail and the guard fall open. A prefix
+// that cannot form a valid CIDR falls back to the bare-address containment
+// check; its malformed prefix is rejected by input validation next.
+func (g *Guardrails) CheckProtectedSubnetCIDR(address, prefix string) error {
+	if cidr, ok := canonicalCIDR(address, prefix); ok {
+		return g.CheckProtectedSubnet(cidr)
+	}
+	return g.CheckProtectedSubnet(address)
 }
 
 // CheckProtectedSubnet returns an error if subnet or IP matches or is contained within any protected subnet.
