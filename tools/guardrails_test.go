@@ -1081,8 +1081,8 @@ func TestDhcpGroupDeleteResolvesChildStatics(t *testing.T) {
 		if res == nil || res.IsError {
 			t.Fatalf("expected success, got error result: %s", resultText(res))
 		}
-		if !fakeCalled(fake, listPath) || !fakeCalled(fake, deletePath) {
-			t.Errorf("expected static/list then group/delete, got %v", fake.paths())
+		if got := fake.paths(); len(got) != 2 || got[0] != listPath || got[1] != deletePath {
+			t.Errorf("expected static/list then group/delete in order, got %v", got)
 		}
 		// Per-path fidelity: the mutation decodes the group/delete body, not the
 		// static/list resolve body it would otherwise share.
