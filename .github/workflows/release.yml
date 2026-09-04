@@ -28,7 +28,7 @@ jobs:
           echo "::error::This workflow must run on a v* tag ref, got ${{ github.ref }}"
           exit 1
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # goreleaser needs the full history to build the changelog.
           fetch-depth: 0
