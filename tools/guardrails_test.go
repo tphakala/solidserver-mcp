@@ -905,6 +905,15 @@ func TestDhcpScopeDeleteResolvesExtent(t *testing.T) {
 		if res == nil || res.IsError {
 			t.Fatalf("expected success, got error result: %s", resultText(res))
 		}
+		// Pin the resolve WHERE clause: the fake ignores it, so only this assertion
+		// catches an operand swap that would filter scope_net_addr on the server
+		// value, match zero rows in production, and let a protected scope slip
+		// through (the issue #53 fail-open). Address and server are distinct so a
+		// swap reddens.
+		where := resolveWhere(t, fake, listPath)
+		if !strings.Contains(where, "scope_net_addr='192.0.2.0'") || !strings.Contains(where, "server_name='dhcp1'") {
+			t.Errorf("resolve WHERE did not scope to the scope address and server: %q", where)
+		}
 		if got := fake.paths(); len(got) != 2 || got[0] != listPath || got[1] != deletePath {
 			t.Errorf("expected scope/list then scope/delete in order, got %v", got)
 		}
@@ -1303,4 +1312,30 @@ func TestGuardrails_ProtectedObjectRefusal(t *testing.T) {
 	testProtectedSubnetOverlapRefusal(t, g, logger)
 	testProtectedDHCPSubnetRefusal(t, g, logger)
 	testProtectedZoneRefusal(t, g, logger)
+}
+
+// TestDhcpGuardFilterColumnsBoundToSDK pins the filter columns the DHCP
+// delete guards query on to the exact SOLIDserver column names. The values are
+// derived from the SDK model JSON tags (see sdsColumn), so sdsColumn already
+// panics at init if a field is renamed or dropped; this test additionally
+// catches a JSON-tag value change that keeps the Go field name (which would not
+// panic) but would make a guard's member query match zero rows and fail a
+// protected-member delete open (issue #53).
+func TestDhcpGuardFilterColumnsBoundToSDK(t *testing.T) {
+	cases := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"scope server", dhcpScopeServerColumn, "server_name"},
+		{"scope net addr", dhcpScopeNetAddrColumn, "scope_net_addr"},
+		{"scope shared network", dhcpScopeSharedNetworkColumn, "sharednetwork_name"},
+		{"static server", dhcpStaticServerColumn, "server_name"},
+		{"static group", dhcpStaticGroupColumn, "group_name"},
+	}
+	for _, tc := range cases {
+		if tc.got != tc.want {
+			t.Errorf("%s filter column = %q, want %q: the SDK JSON tag drifted from the column the appliance expects", tc.name, tc.got, tc.want)
+		}
+	}
 }

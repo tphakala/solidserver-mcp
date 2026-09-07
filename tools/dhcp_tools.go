@@ -731,6 +731,26 @@ func dhcpScopeDeleteHandler(client *services.APIClientWrapper, logger *slog.Logg
 	}
 }
 
+// Filter columns for the DHCP delete-guard member queries, derived from the SDK
+// model JSON tags via sdsColumn. Binding the WHERE column to the SDK model means
+// a future SDK that renames or drops one of these Go fields fails closed at init
+// (a panic) instead of letting a guard query silently match zero rows and fail a
+// protected-member delete open (issue #53); a JSON-tag value change that keeps
+// the field name is caught by TestDhcpGuardFilterColumnsBoundToSDK instead. This
+// binding is applied only to the DHCP guards, whose appliance filter column
+// equals the SDK JSON tag; it is deliberately not applied to the IPAM/DNS
+// resolve guards, whose filter columns do not all match their response tags (for
+// example the network filter site_name vs the response tag space_name). The
+// scope columns come from the scope-list model and the static columns from the
+// static-list model, matching what each guard's member query filters against.
+var (
+	dhcpScopeServerColumn        = sdsColumn[sdsclient.DataInnerDhcpScopeData]("ServerName")
+	dhcpScopeNetAddrColumn       = sdsColumn[sdsclient.DataInnerDhcpScopeData]("ScopeNetAddr")
+	dhcpScopeSharedNetworkColumn = sdsColumn[sdsclient.DataInnerDhcpScopeData]("SharednetworkName")
+	dhcpStaticServerColumn       = sdsColumn[sdsclient.DataInnerDhcpStaticData]("ServerName")
+	dhcpStaticGroupColumn        = sdsColumn[sdsclient.DataInnerDhcpStaticData]("GroupName")
+)
+
 // applyDhcpScopeDeleteExtentProtection refuses a scope delete when any scope at
 // (server, netAddr) encloses or overlaps a protected subnet. It is a no-op
 // (returns nil) when no protected subnets are configured or there is no client,
@@ -762,7 +782,7 @@ func applyDhcpScopeDeleteExtentProtection(ctx context.Context, client *services.
 // is checked. A miss returns no extents and a nil error: nothing to protect and
 // the delete itself reports the miss.
 func lookupDhcpScopeExtents(ctx context.Context, client *services.APIClientWrapper, logger *slog.Logger, server, netAddr string) ([]addrExtent, *mcp.CallToolResult) {
-	where := fmt.Sprintf("scope_net_addr='%s' AND server_name='%s'", EscapeWhereValue(netAddr), EscapeWhereValue(server))
+	where := fmt.Sprintf("%s='%s' AND %s='%s'", dhcpScopeNetAddrColumn, EscapeWhereValue(netAddr), dhcpScopeServerColumn, EscapeWhereValue(server))
 	return runDhcpScopeExtentQuery(ctx, client, logger, "solidserver_dhcp_scope_delete", where)
 }
 
@@ -1267,7 +1287,7 @@ func (e addrExtent) parseable() bool {
 // of the scopes grouped under (server, name). A miss returns no extents and a nil
 // error: nothing to protect, and the delete itself reports the miss.
 func lookupDhcpSharedNetworkScopeExtents(ctx context.Context, client *services.APIClientWrapper, logger *slog.Logger, server, name string) ([]addrExtent, *mcp.CallToolResult) {
-	where := fmt.Sprintf("sharednetwork_name='%s' AND server_name='%s'", EscapeWhereValue(name), EscapeWhereValue(server))
+	where := fmt.Sprintf("%s='%s' AND %s='%s'", dhcpScopeSharedNetworkColumn, EscapeWhereValue(name), dhcpScopeServerColumn, EscapeWhereValue(server))
 	return runDhcpScopeExtentQuery(ctx, client, logger, "solidserver_dhcp_shared_network_delete", where)
 }
 
@@ -1300,7 +1320,7 @@ func applyDhcpGroupDeleteStaticProtection(ctx context.Context, client *services.
 // lookupDhcpGroupStaticAddrs returns the reservation addresses gathered under
 // (server, name). A miss returns no addresses and a nil error.
 func lookupDhcpGroupStaticAddrs(ctx context.Context, client *services.APIClientWrapper, logger *slog.Logger, server, name string) ([]string, *mcp.CallToolResult) {
-	where := fmt.Sprintf("group_name='%s' AND server_name='%s'", EscapeWhereValue(name), EscapeWhereValue(server))
+	where := fmt.Sprintf("%s='%s' AND %s='%s'", dhcpStaticGroupColumn, EscapeWhereValue(name), dhcpStaticServerColumn, EscapeWhereValue(server))
 	authCtx := client.AuthContext(ctx)
 	resp, httpResp, apiErr := client.DhcpAPI.DhcpStaticList(authCtx).Where(where).Limit(maxListLimit).Execute()
 	closeBody(httpResp)

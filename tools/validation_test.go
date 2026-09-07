@@ -389,3 +389,39 @@ func TestValidateWhereClause(t *testing.T) {
 		})
 	}
 }
+
+func TestSDSColumn(t *testing.T) {
+	type model struct {
+		Named    *string `json:"named_col,omitempty"`
+		Plain    string  `json:"plain_col"`
+		Ignored  string  `json:"-"`
+		Untagged string
+	}
+
+	t.Run("strips omitempty", func(t *testing.T) {
+		if got := sdsColumn[model]("Named"); got != "named_col" {
+			t.Errorf("sdsColumn(Named) = %q, want %q", got, "named_col")
+		}
+	})
+	t.Run("plain tag", func(t *testing.T) {
+		if got := sdsColumn[model]("Plain"); got != "plain_col" {
+			t.Errorf("sdsColumn(Plain) = %q, want %q", got, "plain_col")
+		}
+	})
+
+	panicCases := map[string]string{
+		"missing field": "Absent",
+		"ignored tag":   "Ignored",
+		"no json tag":   "Untagged",
+	}
+	for name, field := range panicCases {
+		t.Run("panics on "+name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("sdsColumn(%q) did not panic; a missing or unusable column must fail closed at init", field)
+				}
+			}()
+			_ = sdsColumn[model](field)
+		})
+	}
+}
