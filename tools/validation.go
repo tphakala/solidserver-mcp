@@ -5,6 +5,7 @@ import (
 	"maps"
 	"net"
 	"net/netip"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -457,6 +458,34 @@ func ValidateVlanID(vlanID int32) error {
 func EscapeWhereValue(s string) string {
 	escaped := strings.ReplaceAll(s, `\`, `\\`)
 	return strings.ReplaceAll(escaped, `'`, `\'`)
+}
+
+// sdsColumn returns the SOLIDserver filter column (the JSON tag) that SDK model
+// T uses for its struct field goField, so the DHCP delete-guard WHERE clauses
+// bind to the SDK model instead of a bare string literal. It is used only from
+// the package-level var initializers in dhcp_tools.go, and only for columns
+// whose appliance filter name equals the SDK response JSON tag. That equivalence
+// holds for the DHCP guard columns but is NOT a general property of the API (for
+// example, the IPAM network filter column site_name has no matching JSON tag,
+// whose field is space_name), so this is not a blanket "derive any WHERE column
+// from the SDK" helper. T must be a struct type.
+//
+// If a future SDK renames or drops the Go field, this panics at package init
+// rather than letting a delete guard's member query silently match zero rows and
+// fail a protected-member delete open (issue #53); a panic aborts startup, which
+// is fail-closed. A JSON-tag value change that keeps the Go field name does not
+// panic and is caught by TestDhcpGuardFilterColumnsBoundToSDK instead.
+func sdsColumn[T any](goField string) string {
+	t := reflect.TypeFor[T]()
+	f, ok := t.FieldByName(goField)
+	if !ok {
+		panic(fmt.Sprintf("sdsColumn: %s has no field %q", t, goField))
+	}
+	name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+	if name == "" || name == "-" {
+		panic(fmt.Sprintf("sdsColumn: %s.%s has no JSON column name (tag %q)", t, goField, f.Tag.Get("json")))
+	}
+	return name
 }
 
 // ValidateWhereClause validates user-supplied WHERE clauses to prevent unbalanced quotes, unbalanced parentheses, or null bytes.

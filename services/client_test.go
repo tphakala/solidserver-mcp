@@ -420,3 +420,39 @@ func TestRetryTransport_RequestBodyReplay(t *testing.T) {
 		t.Errorf("expected replayed body %q, got %q", payload, lastReceivedBody)
 	}
 }
+
+// TestSDKSignsRequestQueryString pins the one behavior that separates the
+// solidserver-go-client version we depend on from the broken one. SOLIDserver's
+// EIP API token auth signs the full request URL including the query string, so
+// the SHA3 signature must change when query parameters change. Upstream commit
+// 02483f95 ("GenerateSignature was not including parameters in the Signature")
+// fixed a version that signed only scheme+host+path; that fix is what the
+// v1.8.4-1..-3 tags carry, and it is why go.mod pins v1.8.4-3 rather than the
+// plain v1.8.4 tag (an older October 2024 commit with the bug). In semver the
+// plain v1.8.4 tag sorts newer than the v1.8.4-3 prerelease, so `go get -u` (and
+// any contributor running it) will silently "upgrade" to the broken tag; the
+// dependabot ignore only blocks dependabot's own PRs, not a manual bump. This
+// test fails loudly in CI if that regression ever lands, because the buggy
+// signature would ignore the query string and every filtered SOLIDserver
+// request (WHERE=..., limit=..., offset=...) would fail authentication.
+func TestSDKSignsRequestQueryString(t *testing.T) {
+	auth := sdsclient.EipApiTokenAuth{Token: "token-id", Secret: "token-secret"}
+	const ts = int64(1728463268)
+
+	sign := func(rawURL string) [32]byte {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, rawURL, http.NoBody)
+		if err != nil {
+			t.Fatalf("building request for %q: %v", rawURL, err)
+		}
+		return auth.GenerateSignature(req, ts)
+	}
+
+	withQuery := sign("https://sds.example.com/rest/ip_address_list?limit=10&offset=0")
+	withoutQuery := sign("https://sds.example.com/rest/ip_address_list")
+
+	if withQuery == withoutQuery {
+		t.Fatal("SDK signature ignores the URL query string: this is the broken plain-v1.8.4 behavior. " +
+			"Keep github.com/efficientip-labs/solidserver-go-client pinned at v1.8.4-3 (see upstream commit 02483f95); " +
+			"do not `go get -u` it to v1.8.4.")
+	}
+}
