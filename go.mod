@@ -4,7 +4,7 @@ go 1.27
 
 require (
 	github.com/efficientip-labs/solidserver-go-client v1.8.4-3
-	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/quasilyte/go-ruleguard/dsl v0.3.23
 	golang.org/x/time v0.15.0
 )
